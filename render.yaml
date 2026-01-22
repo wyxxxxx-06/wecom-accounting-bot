@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: wechat-accounting-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api.wechat:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: WECHAT_APPID
+        sync: false
+      - key: WECHAT_APPSECRET
+        sync: false
+      - key: WECHAT_TOKEN
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
