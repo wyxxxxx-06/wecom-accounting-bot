@@ -219,9 +219,11 @@ def get_statistics(start_date: datetime = None, end_date: datetime = None):
     
     for r in records:
         cat = r["category"]
-        user = r.get("nickname", r.get("openid", "未知"))
         by_category[cat] = by_category.get(cat, 0) + r["amount"]
-        by_user[user] = by_user.get(user, 0) + r["amount"]
+        nickname = r.get("nickname", "")
+        openid = r.get("openid", "")
+        if nickname and nickname != openid[:8]:
+            by_user[nickname] = by_user.get(nickname, 0) + r["amount"]
         if not max_record or r["amount"] > max_record["amount"]:
             max_record = r
     
@@ -485,10 +487,15 @@ def parse_message(content: str) -> dict:
         return {"type": "help"}
 
     # 导出
+    export_table_match = re.match(r'^(导出表|表格导出)\s*(.*)$', content)
+    if export_table_match:
+        target = export_table_match.group(2)
+        return {"type": "export", "target": target.strip() if target else "", "format": "table"}
+
     export_match = re.match(r'^导出(?:\s+(.+))?$', content)
     if export_match:
         target = export_match.group(1)
-        return {"type": "export", "target": target.strip() if target else ""}
+        return {"type": "export", "target": target.strip() if target else "", "format": "csv"}
 
     # 记录修改/删除
     edit_match = re.match(r'^(改|修改)\s+(\d+)\s+(.+)$', content)
@@ -616,8 +623,7 @@ def format_records(records: list, limit: int = 20) -> str:
     for i, r in enumerate(records[:limit], start=1):
         dt = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
         date_str = dt.strftime("%m-%d %H:%M")
-        user = r.get("nickname", r.get("openid", "未知")[:4])
-        lines.append(f"{i}. {date_str} {user} {r['description']} {r['amount']:.2f}元 [{r['category']}]")
+        lines.append(f"{i}. {date_str} {r['description']} {r['amount']:.2f}元 [{r['category']}]")
     
     if len(records) > limit:
         lines.append(f"  ... 共 {len(records)} 条记录")
@@ -630,18 +636,35 @@ def format_export_csv(records: list, limit: int = 200) -> str:
     if not records:
         return "导出结果：暂无记录"
 
-    header = "date,description,amount,category,user"
+    header = "date,description,amount,category"
     lines = [header]
     for r in records[:limit]:
         dt = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
         date_str = dt.strftime("%Y-%m-%d %H:%M")
         desc = str(r["description"]).replace('"', '""')
-        user = r.get("nickname", r.get("openid", "未知")[:4])
-        line = f"\"{date_str}\",\"{desc}\",{float(r['amount']):.2f},\"{r['category']}\",\"{user}\""
+        line = f"\"{date_str}\",\"{desc}\",{float(r['amount']):.2f},\"{r['category']}\""
         lines.append(line)
 
     if len(records) > limit:
         lines.append(f"# 已截断，仅导出前 {limit} 条")
+
+    return "\n".join(lines)
+
+
+def format_export_table(records: list, limit: int = 200) -> str:
+    """导出表格（文本表格）"""
+    if not records:
+        return "导出结果：暂无记录"
+
+    lines = ["| 日期 | 描述 | 金额 | 分类 |", "| --- | --- | ---: | --- |"]
+    for r in records[:limit]:
+        dt = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
+        date_str = dt.strftime("%Y-%m-%d %H:%M")
+        desc = str(r["description"]).replace("|", " ")
+        lines.append(f"| {date_str} | {desc} | {float(r['amount']):.2f} | {r['category']} |")
+
+    if len(records) > limit:
+        lines.append(f"> 已截断，仅导出前 {limit} 条")
 
     return "\n".join(lines)
 
@@ -692,6 +715,7 @@ def get_help_text() -> str:
 
 【导出明细】
 发送：导出 今日 / 昨日 / 七天 / 半个月 / 一个月
+发送：导出表 今日 / 昨日 / 七天 / 半个月 / 一个月
 
 💡 所有记录共同统计，支持多人使用"""
 
@@ -834,6 +858,7 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
     elif parsed["type"] == "export":
         try:
             target = parsed.get("target", "")
+            export_format = parsed.get("format", "csv")
             mapping = {
                 "今日": "today",
                 "昨天": "yesterday",
@@ -851,6 +876,8 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             period_key = mapping.get(target, "month")
             start_date, end_date = get_date_range(period_key)
             records = get_records(start_date=start_date, end_date=end_date)
+            if export_format == "table":
+                return format_export_table(records)
             return format_export_csv(records)
         except Exception as e:
             print(f"导出失败: {str(e)[:100]}")
