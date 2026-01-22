@@ -365,7 +365,7 @@ def archive_old_records():
 
 
 def get_debt(name: str):
-    """获取指定人的欠款记录（别人欠我）"""
+    """获取指定人的欠款记录（我欠别人）"""
     try:
         supabase = get_supabase_client()
         result = supabase.table("debts").select("*").eq("name", name).execute()
@@ -376,7 +376,7 @@ def get_debt(name: str):
 
 
 def add_debt(name: str, amount: float, note: str = ""):
-    """新增或累加欠款（别人欠我）"""
+    """新增或累加欠款（我欠别人）"""
     supabase = get_supabase_client()
     now = datetime.now(LOCAL_TZ).isoformat()
     existing = get_debt(name)
@@ -405,7 +405,7 @@ def add_debt(name: str, amount: float, note: str = ""):
 
 
 def repay_debt(name: str, amount: float):
-    """还钱扣减欠款（别人欠我）"""
+    """还钱扣减欠款（我欠别人）"""
     supabase = get_supabase_client()
     now = datetime.now(LOCAL_TZ).isoformat()
     existing = get_debt(name)
@@ -428,7 +428,7 @@ def repay_debt(name: str, amount: float):
 
 
 def list_debts():
-    """列出所有未清欠款（别人欠我）"""
+    """列出所有未清欠款（我欠别人）"""
     try:
         supabase = get_supabase_client()
         result = supabase.table("debts").select("*").eq("status", "active").order("amount", desc=True).execute()
@@ -573,22 +573,19 @@ def parse_message(content: str) -> dict:
     if delete_match:
         return {"type": "record_delete", "raw": delete_match.group(2).strip()}
 
-    # 外债相关
-    debt_add_match = re.match(r'^欠款\s+(\S+)\s+(\d+(?:\.\d+)?)\s*(.*)$', content)
+    # 外债相关（我欠别人）
+    debt_add_match = re.match(r'^欠\s+(\S+)\s+(\d+(?:\.\d+)?)\s*(.*)$', content)
     if debt_add_match:
         name, amount, note = debt_add_match.groups()
         return {"type": "debt_add", "name": name, "amount": float(amount), "note": note.strip()}
 
-    debt_repay_match = re.match(r'^还钱\s+(\S+)\s+(\d+(?:\.\d+)?)$', content)
+    debt_repay_match = re.match(r'^还\s+(\S+)\s+(\d+(?:\.\d+)?)$', content)
     if debt_repay_match:
         name, amount = debt_repay_match.groups()
         return {"type": "debt_repay", "name": name, "amount": float(amount)}
 
-    debt_query_match = re.match(r'^外债(?:\s+(\S+))?$', content)
+    debt_query_match = re.match(r'^查询外债$', content)
     if debt_query_match:
-        name = debt_query_match.group(1)
-        if name:
-            return {"type": "debt_query_person", "name": name}
         return {"type": "debt_query_all"}
 
     # 自定义分类查询
@@ -767,7 +764,7 @@ def format_debts(debts: list) -> str:
         return "📌 外债总览：暂无欠款"
 
     total = sum(float(d.get("amount", 0)) for d in debts)
-    lines = ["📌 外债总览（别人欠我）"]
+    lines = ["📌 外债总览（我欠别人）"]
     for d in debts:
         lines.append(f"  • {d['name']}：{float(d['amount']):.2f} 元")
     lines.append(f"合计：{total:.2f} 元")
@@ -799,11 +796,10 @@ def get_help_text() -> str:
 发送：分类 夜宵 / 统计 夜宵
 或发送分类名：餐饮 / 交通 / 购物 / 娱乐 / 居住 / 医疗 / 教育
 
-【外债（别人欠我）】
-欠款 张三 5000
-还钱 张三 500
-外债
-外债 张三
+【外债（我欠别人）】
+欠 张三 1000
+还 张三 100
+查询外债
 
 【导出Excel】
 发送：导出 今日 / 昨日 / 七天 / 半个月 / 一个月
@@ -948,7 +944,11 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
         try:
             new_amount = add_debt(parsed["name"], parsed["amount"], parsed.get("note", ""))
             note_text = f"\n备注：{parsed['note']}" if parsed.get("note") else ""
-            return f"✅ 已记录：{parsed['name']} 欠你 {parsed['amount']:.2f} 元{note_text}\n当前欠款：{new_amount:.2f} 元"
+            return (
+                "✅ 记账成功（欠款）\n"
+                f"金额：{parsed['amount']:.2f} 元\n"
+                f"共欠{parsed['name']} {new_amount:.2f}元{note_text}"
+            )
         except Exception as e:
             print(f"外债记录失败: {str(e)[:100]}")
             return "❌ 外债记录失败，请稍后重试"
@@ -957,12 +957,20 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
         try:
             result = repay_debt(parsed["name"], parsed["amount"])
             if result.get("error") == "not_found":
-                return f"❌ 未找到 {parsed['name']} 的欠款记录"
+                return f"❌ 未找到欠{parsed['name']}的记录"
             if result.get("error") == "overpay":
-                return f"❌ {parsed['name']} 当前欠款 {result['balance']:.2f} 元，本次还款超出，请修改金额"
+                return f"❌ 当前欠{parsed['name']} {result['balance']:.2f} 元，本次还款超出，请修改金额"
             if result["status"] == "paid":
-                return f"✅ 还钱 {parsed['name']} {parsed['amount']:.2f} 元\n{parsed['name']} 已还清"
-            return f"✅ 还钱 {parsed['name']} {parsed['amount']:.2f} 元\n剩余欠款 {result['balance']:.2f} 元"
+                return (
+                    "✅ 记账成功（还款）\n"
+                    f"金额：{parsed['amount']:.2f} 元\n"
+                    f"已还清欠{parsed['name']}"
+                )
+            return (
+                "✅ 记账成功（还款）\n"
+                f"金额：{parsed['amount']:.2f} 元\n"
+                f"还欠{parsed['name']} {result['balance']:.2f}元"
+            )
         except Exception as e:
             print(f"外债还款失败: {str(e)[:100]}")
             return "❌ 还款失败，请稍后重试"
@@ -973,16 +981,6 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             return format_debts(debts)
         except Exception as e:
             print(f"外债查询失败: {str(e)[:100]}")
-            return "❌ 外债查询失败，请稍后重试"
-
-    elif parsed["type"] == "debt_query_person":
-        try:
-            debt = get_debt(parsed["name"])
-            if not debt or float(debt.get("amount", 0)) <= 0:
-                return f"📌 {parsed['name']} 当前无欠款"
-            return f"📌 {parsed['name']} 当前欠款：{float(debt['amount']):.2f} 元"
-        except Exception as e:
-            print(f"外债单人查询失败: {str(e)[:100]}")
             return "❌ 外债查询失败，请稍后重试"
 
     elif parsed["type"] == "detail":
