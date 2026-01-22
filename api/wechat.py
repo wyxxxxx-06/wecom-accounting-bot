@@ -288,13 +288,13 @@ def update_record(record_id: int, amount: float, category: str, description: str
         "category": category,
         "description": description
     }
-    supabase.table("records").update(data).eq("id", record_id).execute()
+    return supabase.table("records").update(data).eq("id", record_id).execute()
 
 
 def delete_record(record_id: int):
     """删除记账记录"""
     supabase = get_supabase_client()
-    supabase.table("records").delete().eq("id", record_id).execute()
+    return supabase.table("records").delete().eq("id", record_id).execute()
 
 
 def get_daily_total(record_date: str):
@@ -539,6 +539,8 @@ def parse_message(content: str) -> dict:
         return {"type": "detail"}
     if content in ["帮助", "help", "?"]:
         return {"type": "help"}
+    if content == "统计":
+        return {"type": "query", "period": "7days"}
 
     # 导出
     export_excel_match = re.match(r'^(导出excel|导出Excel|导出表格)\s*(.*)$', content)
@@ -593,7 +595,24 @@ def parse_message(content: str) -> dict:
     if content.startswith("分类 "):
         return {"type": "query_category", "category": content.split(maxsplit=1)[1].strip()}
     if content.startswith("统计 "):
-        return {"type": "query_category", "category": content.split(maxsplit=1)[1].strip()}
+        target = content.split(maxsplit=1)[1].strip()
+        if target in ["今日", "昨天", "昨日", "七天", "近七天", "半个月", "十五天", "近半个月", "一个月", "近一个月", "本周", "本月"]:
+            mapping = {
+                "今日": "today",
+                "昨天": "yesterday",
+                "昨日": "yesterday",
+                "七天": "7days",
+                "近七天": "7days",
+                "半个月": "15days",
+                "十五天": "15days",
+                "近半个月": "15days",
+                "一个月": "30days",
+                "近一个月": "30days",
+                "本周": "week",
+                "本月": "month"
+            }
+            return {"type": "query", "period": mapping[target]}
+        return {"type": "query_category", "category": target}
     
     # 分类查询
     for category in CATEGORY_KEYWORDS.keys():
@@ -639,32 +658,14 @@ def format_statistics(stats: dict, period_name: str, start_date: datetime, end_d
     lines = [
         f"📊 {period_name}统计（{range_text}）",
         f"💰 总支出：{stats['total']:.2f} 元",
-        f"🧾 记录数：{stats['count']} 条",
-        f"📉 平均单笔：{avg:.2f} 元",
         ""
     ]
     
     # 按分类
     if stats["by_category"]:
-        lines.append("📂 分类明细：")
         top_categories = sorted(stats["by_category"].items(), key=lambda x: -x[1])
         for cat, amount in top_categories:
-            lines.append(f"  • {cat}：{amount:.2f} 元")
-    
-    # 按用户
-    if len(stats["by_user"]) > 1:
-        lines.append("")
-        lines.append("👥 个人支出：")
-        for user, amount in sorted(stats["by_user"].items(), key=lambda x: -x[1]):
-            lines.append(f"  • {user}：{amount:.2f} 元")
-
-    if stats.get("max_record"):
-        lines.append("")
-        lines.append(f"🔥 最高单笔：{stats['max_record']['description']} {stats['max_record']['amount']:.2f} 元 [{stats['max_record']['category']}]")
-
-    if stats.get("latest_record"):
-        latest = stats["latest_record"]
-        lines.append(f"🕒 最近一笔：{latest['description']} {latest['amount']:.2f} 元 [{latest['category']}]")
+            lines.append(f"{cat} {amount:.2f}")
     
     return "\n".join(lines)
 
@@ -729,12 +730,18 @@ def build_export_excel_bytes(records: list, start_date: datetime, end_date: date
     daily_totals = {}
     for r in records[:limit]:
         dt = to_local_datetime(r["created_at"])
-        day_key = dt.strftime("%m-%d")
+        day_key = f"{dt.month}.{dt.day}"
         category = r["category"]
         amount = float(r["amount"])
         category_totals[category] = category_totals.get(category, 0) + amount
         daily_totals[day_key] = daily_totals.get(day_key, 0) + amount
 
+    ws.append(["每日合计"])
+    ws.append(["日期", "金额"])
+    for day, amount in sorted(daily_totals.items()):
+        ws.append([day, f"花费{round(amount, 2)}"])
+
+    ws.append([])
     ws.append(["类目统计"])
     ws.append(["类目", "金额"])
     for cat, amount in sorted(category_totals.items(), key=lambda x: -x[1]):
@@ -745,14 +752,8 @@ def build_export_excel_bytes(records: list, start_date: datetime, end_date: date
     ws.append(["日期", "描述", "金额", "分类"])
     for r in records[:limit]:
         dt = to_local_datetime(r["created_at"])
-        date_str = dt.strftime("%m-%d")
+        date_str = f"{dt.month}.{dt.day}"
         ws.append([date_str, r["description"], float(r["amount"]), r["category"]])
-
-    ws.append([])
-    ws.append(["每日合计"])
-    ws.append(["日期", "金额"])
-    for day, amount in sorted(daily_totals.items()):
-        ws.append([day, round(amount, 2)])
 
     bio = io.BytesIO()
     wb.save(bio)
@@ -840,7 +841,9 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             if index < 1 or index > len(records):
                 return "❌ 编号无效，请先发送「明细」查看编号"
             record = records[index - 1]
-            update_record(record["id"], parsed["amount"], parsed["category"], parsed["description"])
+            result = update_record(record["id"], parsed["amount"], parsed["category"], parsed["description"])
+            if not getattr(result, "data", []):
+                return "❌ 修改失败，可能没有权限（请检查 RLS 策略）"
             return f"✅ 已修改第 {index} 条\n{parsed['description']}：{parsed['amount']:.2f} 元\n分类：{parsed['category']}"
         except Exception as e:
             print(f"修改记录失败: {str(e)[:100]}")
@@ -874,11 +877,16 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             if invalid:
                 return "❌ 编号无效，请先发送「明细」查看编号"
 
+            deleted = 0
             for i in indices:
                 record = records[i - 1]
-                delete_record(record["id"])
+                result = delete_record(record["id"])
+                if getattr(result, "data", []):
+                    deleted += 1
 
-            return f"✅ 已删除 {len(indices)} 条记录"
+            if deleted == 0:
+                return "❌ 删除失败，可能没有权限（请检查 RLS 策略）"
+            return f"✅ 已删除 {deleted} 条记录"
         except Exception as e:
             print(f"删除记录失败: {str(e)[:100]}")
             return "❌ 删除失败，请稍后重试"
