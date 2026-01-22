@@ -94,6 +94,10 @@ def get_supabase_client():
             self.filters.append((column, "lt", value))
             return self
 
+        def ilike(self, column, value):
+            self.filters.append((column, "ilike", value))
+            return self
+
         def lte(self, column, value):
             self.filters.append((column, "lte", value))
             return self
@@ -205,6 +209,29 @@ def get_records(start_date: datetime = None, end_date: datetime = None, category
         return result.data
     except Exception as e:
         print(f"查询错误: {str(e)[:100]}")
+        return []
+
+
+def get_records_by_keyword(start_date: datetime = None, end_date: datetime = None, keyword: str = "", limit: int = None):
+    """按描述关键词查询记录"""
+    try:
+        supabase = get_supabase_client()
+        query = supabase.table("records").select("*")
+
+        if start_date:
+            query = query.gte("created_at", start_date.isoformat())
+        if end_date:
+            query = query.lte("created_at", end_date.isoformat())
+        if keyword:
+            query = query.ilike("description", f"*{keyword}*")
+
+        query = query.order("created_at", desc=True)
+        if limit:
+            query = query.limit(limit)
+        result = query.execute()
+        return result.data
+    except Exception as e:
+        print(f"关键词查询错误: {str(e)[:100]}")
         return []
 
 
@@ -487,11 +514,6 @@ def parse_message(content: str) -> dict:
         return {"type": "help"}
 
     # 导出
-    export_table_match = re.match(r'^(导出表|表格导出)\s*(.*)$', content)
-    if export_table_match:
-        target = export_table_match.group(2)
-        return {"type": "export", "target": target.strip() if target else "", "format": "table"}
-
     export_match = re.match(r'^导出(?:\s+(.+))?$', content)
     if export_match:
         target = export_match.group(1)
@@ -636,35 +658,17 @@ def format_export_csv(records: list, limit: int = 200) -> str:
     if not records:
         return "导出结果：暂无记录"
 
-    header = "date,description,amount,category"
+    header = "日期,描述,金额,分类"
     lines = [header]
     for r in records[:limit]:
         dt = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
         date_str = dt.strftime("%Y-%m-%d %H:%M")
-        desc = str(r["description"]).replace('"', '""')
-        line = f"\"{date_str}\",\"{desc}\",{float(r['amount']):.2f},\"{r['category']}\""
+        desc = str(r["description"]).replace(",", " ")
+        line = f"{date_str},{desc},{float(r['amount']):.2f},{r['category']}"
         lines.append(line)
 
     if len(records) > limit:
         lines.append(f"# 已截断，仅导出前 {limit} 条")
-
-    return "\n".join(lines)
-
-
-def format_export_table(records: list, limit: int = 200) -> str:
-    """导出表格（文本表格）"""
-    if not records:
-        return "导出结果：暂无记录"
-
-    lines = ["| 日期 | 描述 | 金额 | 分类 |", "| --- | --- | ---: | --- |"]
-    for r in records[:limit]:
-        dt = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
-        date_str = dt.strftime("%Y-%m-%d %H:%M")
-        desc = str(r["description"]).replace("|", " ")
-        lines.append(f"| {date_str} | {desc} | {float(r['amount']):.2f} | {r['category']} |")
-
-    if len(records) > limit:
-        lines.append(f"> 已截断，仅导出前 {limit} 条")
 
     return "\n".join(lines)
 
@@ -715,7 +719,6 @@ def get_help_text() -> str:
 
 【导出明细】
 发送：导出 今日 / 昨日 / 七天 / 半个月 / 一个月
-发送：导出表 今日 / 昨日 / 七天 / 半个月 / 一个月
 
 💡 所有记录共同统计，支持多人使用"""
 
@@ -794,12 +797,28 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             total = sum(r["amount"] for r in records)
             count = len(records)
             avg = total / count if count else 0
+            if count > 0:
+                result = (
+                    f"📂 本月【{parsed['category']}】支出：{total:.2f} 元\n"
+                    f"🧾 记录数：{count} 条\n"
+                    f"📉 平均单笔：{avg:.2f} 元\n\n"
+                )
+                result += format_records(records, limit=5)
+                return result
+
+            keyword_records = get_records_by_keyword(start_date=month_start, keyword=parsed["category"])
+            keyword_total = sum(r["amount"] for r in keyword_records)
+            keyword_count = len(keyword_records)
+            keyword_avg = keyword_total / keyword_count if keyword_count else 0
+            if keyword_count == 0:
+                return "📝 暂无记录"
+
             result = (
-                f"📂 本月【{parsed['category']}】支出：{total:.2f} 元\n"
-                f"🧾 记录数：{count} 条\n"
-                f"📉 平均单笔：{avg:.2f} 元\n\n"
+                f"🔎 本月包含「{parsed['category']}」的支出：{keyword_total:.2f} 元\n"
+                f"🧾 记录数：{keyword_count} 条\n"
+                f"📉 平均单笔：{keyword_avg:.2f} 元\n\n"
             )
-            result += format_records(records, limit=5)
+            result += format_records(keyword_records, limit=5)
             return result
         except Exception as e:
             print(f"分类查询失败: {str(e)[:100]}")
@@ -858,7 +877,6 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
     elif parsed["type"] == "export":
         try:
             target = parsed.get("target", "")
-            export_format = parsed.get("format", "csv")
             mapping = {
                 "今日": "today",
                 "昨天": "yesterday",
@@ -876,8 +894,6 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             period_key = mapping.get(target, "month")
             start_date, end_date = get_date_range(period_key)
             records = get_records(start_date=start_date, end_date=end_date)
-            if export_format == "table":
-                return format_export_table(records)
             return format_export_csv(records)
         except Exception as e:
             print(f"导出失败: {str(e)[:100]}")
