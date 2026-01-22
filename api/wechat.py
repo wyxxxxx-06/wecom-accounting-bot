@@ -8,6 +8,7 @@ import hashlib
 import time
 import json
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from urllib.parse import unquote
 
 from fastapi import FastAPI, Request, Response
@@ -27,6 +28,7 @@ PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 RETENTION_DAYS = 38
 ARCHIVE_BATCH = 200
 EXPORT_TTL_SECONDS = 600
+LOCAL_TZ = ZoneInfo("Asia/Shanghai")
 
 # ============ 分类关键词映射 ============
 CATEGORY_KEYWORDS = {
@@ -186,7 +188,7 @@ def add_record(openid: str, nickname: str, amount: float, category: str, descrip
             "amount": amount,
             "category": category,
             "description": description,
-            "created_at": datetime.now().isoformat()
+            "created_at": datetime.now(LOCAL_TZ).isoformat()
         }
         result = supabase.table("records").insert(data).execute()
         return result
@@ -270,6 +272,14 @@ def get_statistics(start_date: datetime = None, end_date: datetime = None):
     }
 
 
+def to_local_datetime(value: str) -> datetime:
+    """解析并转为北京时间"""
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=LOCAL_TZ)
+    return dt.astimezone(LOCAL_TZ)
+
+
 def update_record(record_id: int, amount: float, category: str, description: str):
     """更新记账记录"""
     supabase = get_supabase_client()
@@ -301,7 +311,7 @@ def get_daily_total(record_date: str):
 def add_daily_total(record_date: str, amount: float):
     """新增或累加日汇总"""
     supabase = get_supabase_client()
-    now = datetime.now().isoformat()
+    now = datetime.now(LOCAL_TZ).isoformat()
     existing = get_daily_total(record_date)
     if existing:
         new_total = float(existing.get("total_amount", 0)) + amount
@@ -323,7 +333,7 @@ def archive_old_records():
     """归档超过保留天数的明细，只保留金额汇总"""
     try:
         supabase = get_supabase_client()
-        cutoff = datetime.now() - timedelta(days=RETENTION_DAYS)
+        cutoff = datetime.now(LOCAL_TZ) - timedelta(days=RETENTION_DAYS)
         records = (
             supabase.table("records")
             .select("*")
@@ -338,7 +348,7 @@ def archive_old_records():
 
         totals_by_date = {}
         for r in records:
-            dt = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
+            dt = to_local_datetime(r["created_at"])
             date_key = dt.strftime("%Y-%m-%d")
             totals_by_date[date_key] = totals_by_date.get(date_key, 0) + float(r["amount"])
 
@@ -368,7 +378,7 @@ def get_debt(name: str):
 def add_debt(name: str, amount: float, note: str = ""):
     """新增或累加欠款（别人欠我）"""
     supabase = get_supabase_client()
-    now = datetime.now().isoformat()
+    now = datetime.now(LOCAL_TZ).isoformat()
     existing = get_debt(name)
     if existing:
         new_amount = float(existing.get("amount", 0)) + amount
@@ -397,7 +407,7 @@ def add_debt(name: str, amount: float, note: str = ""):
 def repay_debt(name: str, amount: float):
     """还钱扣减欠款（别人欠我）"""
     supabase = get_supabase_client()
-    now = datetime.now().isoformat()
+    now = datetime.now(LOCAL_TZ).isoformat()
     existing = get_debt(name)
     if not existing:
         return {"error": "not_found"}
@@ -584,7 +594,7 @@ def parse_message(content: str) -> dict:
 
 def get_date_range(period: str):
     """获取日期范围"""
-    now = datetime.now()
+    now = datetime.now(LOCAL_TZ)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     
     if period == "today":
@@ -654,7 +664,7 @@ def format_records(records: list, limit: int = 20) -> str:
     
     lines = ["📝 最近记录（共同）："]
     for i, r in enumerate(records[:limit], start=1):
-        dt = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
+        dt = to_local_datetime(r["created_at"])
         date_str = dt.strftime("%m-%d %H:%M")
         lines.append(f"{i}. {date_str} {r['description']} {r['amount']:.2f}元 [{r['category']}]")
     
@@ -701,7 +711,7 @@ def build_export_excel_bytes(records: list, limit: int = 1000) -> bytes:
     ws.append(["日期", "描述", "金额", "分类"])
 
     for r in records[:limit]:
-        dt = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
+        dt = to_local_datetime(r["created_at"])
         date_str = dt.strftime("%Y-%m-%d %H:%M")
         ws.append([date_str, r["description"], float(r["amount"]), r["category"]])
 
