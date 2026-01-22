@@ -19,6 +19,8 @@ APPSECRET = os.environ.get("WECHAT_APPSECRET", "")
 TOKEN = os.environ.get("WECHAT_TOKEN", "")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+RETENTION_DAYS = 38
+ARCHIVE_BATCH = 200
 
 # ============ 分类关键词映射 ============
 CATEGORY_KEYWORDS = {
@@ -88,6 +90,10 @@ def get_supabase_client():
             self.filters.append((column, "gte", value))
             return self
         
+        def lt(self, column, value):
+            self.filters.append((column, "lt", value))
+            return self
+
         def lte(self, column, value):
             self.filters.append((column, "lte", value))
             return self
@@ -162,6 +168,7 @@ def get_supabase_client():
 def add_record(openid: str, nickname: str, amount: float, category: str, description: str):
     """添加记账记录"""
     try:
+        archive_old_records()
         supabase = get_supabase_client()
         data = {
             "openid": openid,
@@ -208,18 +215,23 @@ def get_statistics(start_date: datetime = None, end_date: datetime = None):
     total = sum(r["amount"] for r in records)
     by_category = {}
     by_user = {}
+    max_record = None
     
     for r in records:
         cat = r["category"]
         user = r.get("nickname", r.get("openid", "未知"))
         by_category[cat] = by_category.get(cat, 0) + r["amount"]
         by_user[user] = by_user.get(user, 0) + r["amount"]
+        if not max_record or r["amount"] > max_record["amount"]:
+            max_record = r
     
     return {
         "total": total,
         "by_category": by_category,
         "by_user": by_user,
-        "count": len(records)
+        "count": len(records),
+        "max_record": max_record,
+        "latest_record": records[0] if records else None
     }
 
 
@@ -238,6 +250,73 @@ def delete_record(record_id: int):
     """删除记账记录"""
     supabase = get_supabase_client()
     supabase.table("records").delete().eq("id", record_id).execute()
+
+
+def get_daily_total(record_date: str):
+    """获取按天汇总数据"""
+    try:
+        supabase = get_supabase_client()
+        result = supabase.table("daily_totals").select("*").eq("record_date", record_date).execute()
+        return result.data[0] if result.data else None
+    except Exception as e:
+        print(f"汇总查询错误: {str(e)[:100]}")
+        return None
+
+
+def add_daily_total(record_date: str, amount: float):
+    """新增或累加日汇总"""
+    supabase = get_supabase_client()
+    now = datetime.now().isoformat()
+    existing = get_daily_total(record_date)
+    if existing:
+        new_total = float(existing.get("total_amount", 0)) + amount
+        supabase.table("daily_totals").update({
+            "total_amount": new_total,
+            "updated_at": now
+        }).eq("record_date", record_date).execute()
+        return new_total
+
+    supabase.table("daily_totals").insert({
+        "record_date": record_date,
+        "total_amount": amount,
+        "updated_at": now
+    }).execute()
+    return amount
+
+
+def archive_old_records():
+    """归档超过保留天数的明细，只保留金额汇总"""
+    try:
+        supabase = get_supabase_client()
+        cutoff = datetime.now() - timedelta(days=RETENTION_DAYS)
+        records = (
+            supabase.table("records")
+            .select("*")
+            .lte("created_at", cutoff.isoformat())
+            .order("created_at", desc=False)
+            .limit(ARCHIVE_BATCH)
+            .execute()
+            .data
+        )
+        if not records:
+            return 0
+
+        totals_by_date = {}
+        for r in records:
+            dt = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
+            date_key = dt.strftime("%Y-%m-%d")
+            totals_by_date[date_key] = totals_by_date.get(date_key, 0) + float(r["amount"])
+
+        for date_key, amount in totals_by_date.items():
+            add_daily_total(date_key, amount)
+
+        for r in records:
+            delete_record(r["id"])
+
+        return len(records)
+    except Exception as e:
+        print(f"归档错误: {str(e)[:100]}")
+        return 0
 
 
 def get_debt(name: str):
@@ -388,6 +467,14 @@ def parse_message(content: str) -> dict:
     # 查询命令
     if content in ["今日", "今天"]:
         return {"type": "query", "period": "today"}
+    if content in ["昨日", "昨天"]:
+        return {"type": "query", "period": "yesterday"}
+    if content in ["七天", "近七天"]:
+        return {"type": "query", "period": "7days"}
+    if content in ["半个月", "十五天", "近半个月"]:
+        return {"type": "query", "period": "15days"}
+    if content in ["一个月", "近一个月", "30天"]:
+        return {"type": "query", "period": "30days"}
     if content in ["本周", "这周"]:
         return {"type": "query", "period": "week"}
     if content in ["本月", "这个月"]:
@@ -396,6 +483,12 @@ def parse_message(content: str) -> dict:
         return {"type": "detail"}
     if content in ["帮助", "help", "?"]:
         return {"type": "help"}
+
+    # 导出
+    export_match = re.match(r'^导出(?:\s+(.+))?$', content)
+    if export_match:
+        target = export_match.group(1)
+        return {"type": "export", "target": target.strip() if target else ""}
 
     # 记录修改/删除
     edit_match = re.match(r'^(改|修改)\s+(\d+)\s+(.+)$', content)
@@ -456,6 +549,16 @@ def get_date_range(period: str):
     
     if period == "today":
         return today_start, now
+    elif period == "yesterday":
+        yesterday_start = today_start - timedelta(days=1)
+        yesterday_end = today_start - timedelta(seconds=1)
+        return yesterday_start, yesterday_end
+    elif period == "7days":
+        return now - timedelta(days=7), now
+    elif period == "15days":
+        return now - timedelta(days=15), now
+    elif period == "30days":
+        return now - timedelta(days=30), now
     elif period == "week":
         week_start = today_start - timedelta(days=today_start.weekday())
         return week_start, now
@@ -492,11 +595,19 @@ def format_statistics(stats: dict, period_name: str) -> str:
         lines.append("👥 个人支出：")
         for user, amount in sorted(stats["by_user"].items(), key=lambda x: -x[1]):
             lines.append(f"  • {user}：{amount:.2f} 元")
+
+    if stats.get("max_record"):
+        lines.append("")
+        lines.append(f"🔥 最高单笔：{stats['max_record']['description']} {stats['max_record']['amount']:.2f} 元 [{stats['max_record']['category']}]")
+
+    if stats.get("latest_record"):
+        latest = stats["latest_record"]
+        lines.append(f"🕒 最近一笔：{latest['description']} {latest['amount']:.2f} 元 [{latest['category']}]")
     
     return "\n".join(lines)
 
 
-def format_records(records: list, limit: int = 10) -> str:
+def format_records(records: list, limit: int = 20) -> str:
     """格式化记录列表"""
     if not records:
         return "📝 暂无记录"
@@ -511,6 +622,27 @@ def format_records(records: list, limit: int = 10) -> str:
     if len(records) > limit:
         lines.append(f"  ... 共 {len(records)} 条记录")
     
+    return "\n".join(lines)
+
+
+def format_export_csv(records: list, limit: int = 200) -> str:
+    """导出 CSV 文本"""
+    if not records:
+        return "导出结果：暂无记录"
+
+    header = "date,description,amount,category,user"
+    lines = [header]
+    for r in records[:limit]:
+        dt = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
+        date_str = dt.strftime("%Y-%m-%d %H:%M")
+        desc = str(r["description"]).replace('"', '""')
+        user = r.get("nickname", r.get("openid", "未知")[:4])
+        line = f"\"{date_str}\",\"{desc}\",{float(r['amount']):.2f},\"{r['category']}\",\"{user}\""
+        lines.append(line)
+
+    if len(records) > limit:
+        lines.append(f"# 已截断，仅导出前 {limit} 条")
+
     return "\n".join(lines)
 
 
@@ -539,7 +671,7 @@ def get_help_text() -> str:
 也支持：描述 金额 / 金额 描述（自动分类）
 
 【查询统计】
-发送：今日 / 本周 / 本月
+发送：今日 / 昨日 / 七天 / 半个月 / 一个月 / 本周 / 本月
 
 【查看明细】
 发送：明细
@@ -557,6 +689,9 @@ def get_help_text() -> str:
 还钱 张三 500
 外债
 外债 张三
+
+【导出明细】
+发送：导出 今日 / 昨日 / 七天 / 半个月 / 一个月
 
 💡 所有记录共同统计，支持多人使用"""
 
@@ -612,7 +747,15 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
     elif parsed["type"] == "query":
         try:
             start_date, end_date = get_date_range(parsed["period"])
-            period_names = {"today": "今日", "week": "本周", "month": "本月"}
+            period_names = {
+                "today": "今日",
+                "yesterday": "昨日",
+                "7days": "近七天",
+                "15days": "近半个月",
+                "30days": "近一个月",
+                "week": "本周",
+                "month": "本月"
+            }
             stats = get_statistics(start_date=start_date, end_date=end_date)
             return format_statistics(stats, period_names[parsed["period"]])
         except Exception as e:
@@ -625,7 +768,13 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             records = get_records(start_date=month_start, category=parsed["category"])
             total = sum(r["amount"] for r in records)
-            result = f"📂 本月【{parsed['category']}】支出：{total:.2f} 元\n\n"
+            count = len(records)
+            avg = total / count if count else 0
+            result = (
+                f"📂 本月【{parsed['category']}】支出：{total:.2f} 元\n"
+                f"🧾 记录数：{count} 条\n"
+                f"📉 平均单笔：{avg:.2f} 元\n\n"
+            )
             result += format_records(records, limit=5)
             return result
         except Exception as e:
@@ -675,11 +824,37 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
 
     elif parsed["type"] == "detail":
         try:
-            records = get_records()
-            return format_records(records, limit=15)
+            cutoff = datetime.now() - timedelta(days=RETENTION_DAYS)
+            records = get_records(start_date=cutoff)
+            return format_records(records, limit=20) + f"\n\n仅展示近 {RETENTION_DAYS} 天明细"
         except Exception as e:
             print(f"明细查询失败: {str(e)[:100]}")
             return "❌ 查询失败，请稍后重试"
+
+    elif parsed["type"] == "export":
+        try:
+            target = parsed.get("target", "")
+            mapping = {
+                "今日": "today",
+                "昨天": "yesterday",
+                "昨日": "yesterday",
+                "七天": "7days",
+                "近七天": "7days",
+                "半个月": "15days",
+                "十五天": "15days",
+                "近半个月": "15days",
+                "一个月": "30days",
+                "近一个月": "30days",
+                "本周": "week",
+                "本月": "month"
+            }
+            period_key = mapping.get(target, "month")
+            start_date, end_date = get_date_range(period_key)
+            records = get_records(start_date=start_date, end_date=end_date)
+            return format_export_csv(records)
+        except Exception as e:
+            print(f"导出失败: {str(e)[:100]}")
+            return "❌ 导出失败，请稍后重试"
     
     else:
         return "🤔 没理解你的意思\n\n发送「帮助」查看使用说明"
