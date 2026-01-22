@@ -66,6 +66,12 @@ def get_supabase_client():
         
         def select(self, columns="*"):
             return QueryBuilder(self.url, self.headers, columns)
+
+        def update(self, data):
+            return UpdateBuilder(self.url, self.headers, data)
+
+        def delete(self):
+            return DeleteBuilder(self.url, self.headers)
     
     class QueryBuilder:
         def __init__(self, url, headers, columns):
@@ -89,6 +95,10 @@ def get_supabase_client():
         def order(self, column, desc=False):
             self.params["order"] = f"{column}.{'desc' if desc else 'asc'}"
             return self
+
+        def limit(self, count: int):
+            self.params["limit"] = str(count)
+            return self
         
         def execute(self):
             for column, op, value in self.filters:
@@ -100,6 +110,51 @@ def get_supabase_client():
                 def __init__(self, data):
                     self.data = data
             return Result(response.json())
+
+    class UpdateBuilder:
+        def __init__(self, url, headers, data):
+            self.url = url
+            self.headers = headers
+            self.data = data
+            self.params = {}
+            self.filters = []
+
+        def eq(self, column, value):
+            self.filters.append((column, "eq", value))
+            return self
+
+        def execute(self):
+            for column, op, value in self.filters:
+                self.params[column] = f"{op}.{value}"
+
+            response = httpx.patch(self.url, params=self.params, json=self.data, headers=self.headers, timeout=10.0)
+            response.raise_for_status()
+            class Result:
+                def __init__(self, data):
+                    self.data = data
+            return Result(response.json() if response.content else [])
+
+    class DeleteBuilder:
+        def __init__(self, url, headers):
+            self.url = url
+            self.headers = headers
+            self.params = {}
+            self.filters = []
+
+        def eq(self, column, value):
+            self.filters.append((column, "eq", value))
+            return self
+
+        def execute(self):
+            for column, op, value in self.filters:
+                self.params[column] = f"{op}.{value}"
+
+            response = httpx.delete(self.url, params=self.params, headers=self.headers, timeout=10.0)
+            response.raise_for_status()
+            class Result:
+                def __init__(self, data):
+                    self.data = data
+            return Result(response.json() if response.content else [])
     
     return SupabaseClient(SUPABASE_URL, SUPABASE_KEY)
 
@@ -123,7 +178,7 @@ def add_record(openid: str, nickname: str, amount: float, category: str, descrip
         raise
 
 
-def get_records(start_date: datetime = None, end_date: datetime = None, category: str = None):
+def get_records(start_date: datetime = None, end_date: datetime = None, category: str = None, limit: int = None):
     """查询记录（所有人共同）"""
     try:
         supabase = get_supabase_client()
@@ -137,6 +192,8 @@ def get_records(start_date: datetime = None, end_date: datetime = None, category
             query = query.eq("category", category)
         
         query = query.order("created_at", desc=True)
+        if limit:
+            query = query.limit(limit)
         result = query.execute()
         return result.data
     except Exception as e:
@@ -166,6 +223,97 @@ def get_statistics(start_date: datetime = None, end_date: datetime = None):
     }
 
 
+def update_record(record_id: int, amount: float, category: str, description: str):
+    """更新记账记录"""
+    supabase = get_supabase_client()
+    data = {
+        "amount": amount,
+        "category": category,
+        "description": description
+    }
+    supabase.table("records").update(data).eq("id", record_id).execute()
+
+
+def delete_record(record_id: int):
+    """删除记账记录"""
+    supabase = get_supabase_client()
+    supabase.table("records").delete().eq("id", record_id).execute()
+
+
+def get_debt(name: str):
+    """获取指定人的欠款记录（别人欠我）"""
+    try:
+        supabase = get_supabase_client()
+        result = supabase.table("debts").select("*").eq("name", name).execute()
+        return result.data[0] if result.data else None
+    except Exception as e:
+        print(f"外债查询错误: {str(e)[:100]}")
+        return None
+
+
+def add_debt(name: str, amount: float, note: str = ""):
+    """新增或累加欠款（别人欠我）"""
+    supabase = get_supabase_client()
+    now = datetime.now().isoformat()
+    existing = get_debt(name)
+    if existing:
+        new_amount = float(existing.get("amount", 0)) + amount
+        data = {
+            "amount": new_amount,
+            "status": "active",
+            "updated_at": now
+        }
+        if note:
+            data["note"] = note
+        supabase.table("debts").update(data).eq("name", name).execute()
+        return new_amount
+
+    data = {
+        "name": name,
+        "amount": amount,
+        "status": "active",
+        "note": note,
+        "created_at": now,
+        "updated_at": now
+    }
+    supabase.table("debts").insert(data).execute()
+    return amount
+
+
+def repay_debt(name: str, amount: float):
+    """还钱扣减欠款（别人欠我）"""
+    supabase = get_supabase_client()
+    now = datetime.now().isoformat()
+    existing = get_debt(name)
+    if not existing:
+        return {"error": "not_found"}
+
+    balance = float(existing.get("amount", 0))
+    if amount > balance:
+        return {"error": "overpay", "balance": balance}
+
+    new_balance = balance - amount
+    status = "paid" if new_balance == 0 else "active"
+    data = {
+        "amount": new_balance,
+        "status": status,
+        "updated_at": now
+    }
+    supabase.table("debts").update(data).eq("name", name).execute()
+    return {"balance": new_balance, "status": status}
+
+
+def list_debts():
+    """列出所有未清欠款（别人欠我）"""
+    try:
+        supabase = get_supabase_client()
+        result = supabase.table("debts").select("*").eq("status", "active").order("amount", desc=True).execute()
+        return result.data
+    except Exception as e:
+        print(f"外债列表错误: {str(e)[:100]}")
+        return []
+
+
 # ============ 消息解析 ============
 def parse_category(text: str) -> str:
     """从文本中识别分类"""
@@ -177,28 +325,22 @@ def parse_category(text: str) -> str:
     return "其他"
 
 
-def parse_message(content: str) -> dict:
-    """解析用户消息"""
+def parse_record_text(text: str) -> dict:
+    """解析记账文本，返回 dict 或 unknown"""
     import re
-    content = content.strip()
-    
-    # 查询命令
-    if content in ["今日", "今天"]:
-        return {"type": "query", "period": "today"}
-    if content in ["本周", "这周"]:
-        return {"type": "query", "period": "week"}
-    if content in ["本月", "这个月"]:
-        return {"type": "query", "period": "month"}
-    if content in ["明细", "详情", "记录"]:
-        return {"type": "detail"}
-    if content in ["帮助", "help", "?"]:
-        return {"type": "help"}
-    
-    # 分类查询
-    for category in CATEGORY_KEYWORDS.keys():
-        if content == category:
-            return {"type": "query_category", "category": category}
-    
+    text = text.strip()
+
+    # 分类 描述 金额（手动分类优先）
+    explicit_match = re.match(r'^(\S+)\s+(.+?)\s+(\d+(?:\.\d+)?)$', text)
+    if explicit_match:
+        category, desc, amount = explicit_match.groups()
+        return {
+            "type": "record",
+            "amount": float(amount),
+            "description": desc.strip(),
+            "category": category.strip()
+        }
+
     # 记账：尝试解析金额
     patterns = [
         r'^(.+?)\s+(\d+(?:\.\d+)?)\s*(.*)$',  # 描述 金额 [分类]
@@ -206,9 +348,9 @@ def parse_message(content: str) -> dict:
         r'^(.+?)(\d+(?:\.\d+)?)$',             # 描述金额（无空格）
         r'^(\d+(?:\.\d+)?)(.+?)$',             # 金额描述（无空格）
     ]
-    
+
     for i, pattern in enumerate(patterns):
-        match = re.match(pattern, content)
+        match = re.match(pattern, text)
         if match:
             groups = match.groups()
             if i == 0:  # 描述 金额 [分类]
@@ -227,15 +369,84 @@ def parse_message(content: str) -> dict:
                 amount, desc = groups
                 amount = float(amount)
                 category = parse_category(desc)
-            
+
             return {
                 "type": "record",
                 "amount": amount,
                 "description": desc.strip(),
                 "category": category
             }
-    
+
     return {"type": "unknown"}
+
+
+def parse_message(content: str) -> dict:
+    """解析用户消息"""
+    import re
+    content = content.strip()
+    
+    # 查询命令
+    if content in ["今日", "今天"]:
+        return {"type": "query", "period": "today"}
+    if content in ["本周", "这周"]:
+        return {"type": "query", "period": "week"}
+    if content in ["本月", "这个月"]:
+        return {"type": "query", "period": "month"}
+    if content in ["明细", "详情", "记录"]:
+        return {"type": "detail"}
+    if content in ["帮助", "help", "?"]:
+        return {"type": "help"}
+
+    # 记录修改/删除
+    edit_match = re.match(r'^(改|修改)\s+(\d+)\s+(.+)$', content)
+    if edit_match:
+        index = int(edit_match.group(2))
+        rest = edit_match.group(3).strip()
+        parsed = parse_record_text(rest)
+        if parsed["type"] == "record":
+            return {
+                "type": "record_edit",
+                "index": index,
+                "amount": parsed["amount"],
+                "description": parsed["description"],
+                "category": parsed["category"]
+            }
+        return {"type": "unknown"}
+
+    delete_match = re.match(r'^(删|删除)\s+(\d+)$', content)
+    if delete_match:
+        return {"type": "record_delete", "index": int(delete_match.group(2))}
+
+    # 外债相关
+    debt_add_match = re.match(r'^欠款\s+(\S+)\s+(\d+(?:\.\d+)?)\s*(.*)$', content)
+    if debt_add_match:
+        name, amount, note = debt_add_match.groups()
+        return {"type": "debt_add", "name": name, "amount": float(amount), "note": note.strip()}
+
+    debt_repay_match = re.match(r'^还钱\s+(\S+)\s+(\d+(?:\.\d+)?)$', content)
+    if debt_repay_match:
+        name, amount = debt_repay_match.groups()
+        return {"type": "debt_repay", "name": name, "amount": float(amount)}
+
+    debt_query_match = re.match(r'^外债(?:\s+(\S+))?$', content)
+    if debt_query_match:
+        name = debt_query_match.group(1)
+        if name:
+            return {"type": "debt_query_person", "name": name}
+        return {"type": "debt_query_all"}
+
+    # 自定义分类查询
+    if content.startswith("分类 "):
+        return {"type": "query_category", "category": content.split(maxsplit=1)[1].strip()}
+    if content.startswith("统计 "):
+        return {"type": "query_category", "category": content.split(maxsplit=1)[1].strip()}
+    
+    # 分类查询
+    for category in CATEGORY_KEYWORDS.keys():
+        if content == category:
+            return {"type": "query_category", "category": category}
+    
+    return parse_record_text(content)
 
 
 def get_date_range(period: str):
@@ -259,12 +470,20 @@ def format_statistics(stats: dict, period_name: str) -> str:
     if stats["count"] == 0:
         return f"📊 {period_name}暂无记录"
     
-    lines = [f"📊 {period_name}统计（共同）", f"💰 总支出：{stats['total']:.2f} 元", ""]
+    avg = stats["total"] / stats["count"] if stats["count"] else 0
+    lines = [
+        f"📊 {period_name}统计（共同）",
+        f"💰 总支出：{stats['total']:.2f} 元",
+        f"🧾 记录数：{stats['count']} 条",
+        f"📉 平均单笔：{avg:.2f} 元",
+        ""
+    ]
     
     # 按分类
     if stats["by_category"]:
         lines.append("📂 分类明细：")
-        for cat, amount in sorted(stats["by_category"].items(), key=lambda x: -x[1]):
+        top_categories = sorted(stats["by_category"].items(), key=lambda x: -x[1])
+        for cat, amount in top_categories:
             lines.append(f"  • {cat}：{amount:.2f} 元")
     
     # 按用户
@@ -283,15 +502,28 @@ def format_records(records: list, limit: int = 10) -> str:
         return "📝 暂无记录"
     
     lines = ["📝 最近记录（共同）："]
-    for r in records[:limit]:
+    for i, r in enumerate(records[:limit], start=1):
         dt = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
         date_str = dt.strftime("%m-%d %H:%M")
         user = r.get("nickname", r.get("openid", "未知")[:4])
-        lines.append(f"  • {date_str} {user} {r['description']} {r['amount']:.2f}元 [{r['category']}]")
+        lines.append(f"{i}. {date_str} {user} {r['description']} {r['amount']:.2f}元 [{r['category']}]")
     
     if len(records) > limit:
         lines.append(f"  ... 共 {len(records)} 条记录")
     
+    return "\n".join(lines)
+
+
+def format_debts(debts: list) -> str:
+    """格式化外债列表"""
+    if not debts:
+        return "📌 外债总览：暂无欠款"
+
+    total = sum(float(d.get("amount", 0)) for d in debts)
+    lines = ["📌 外债总览（别人欠我）"]
+    for d in debts:
+        lines.append(f"  • {d['name']}：{float(d['amount']):.2f} 元")
+    lines.append(f"合计：{total:.2f} 元")
     return "\n".join(lines)
 
 
@@ -300,10 +532,11 @@ def get_help_text() -> str:
     return """📖 记账机器人使用指南
 
 【记账】
-发送：描述 金额
-例如：午餐 35
-      打车 50 交通
-      35 买水果
+发送：分类 描述 金额
+例如：夜宵 鸡锁骨 18
+      夜宵 泡面 18
+      买菜 西红柿 25
+也支持：描述 金额 / 金额 描述（自动分类）
 
 【查询统计】
 发送：今日 / 本周 / 本月
@@ -311,8 +544,19 @@ def get_help_text() -> str:
 【查看明细】
 发送：明细
 
+【修改/删除记录】
+发送：改 1 夜宵 鸡锁骨 16
+发送：删 2
+
 【按分类查询】
-发送分类名：餐饮 / 交通 / 购物 / 娱乐 / 居住 / 医疗 / 教育
+发送：分类 夜宵 / 统计 夜宵
+或发送分类名：餐饮 / 交通 / 购物 / 娱乐 / 居住 / 医疗 / 教育
+
+【外债（别人欠我）】
+欠款 张三 5000
+还钱 张三 500
+外债
+外债 张三
 
 💡 所有记录共同统计，支持多人使用"""
 
@@ -338,6 +582,32 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
         except Exception as e:
             print(f"记账失败: {str(e)[:100]}")
             return "❌ 记账失败，请稍后重试"
+
+    elif parsed["type"] == "record_edit":
+        try:
+            records = get_records(limit=20)
+            index = parsed["index"]
+            if index < 1 or index > len(records):
+                return "❌ 编号无效，请先发送「明细」查看编号"
+            record = records[index - 1]
+            update_record(record["id"], parsed["amount"], parsed["category"], parsed["description"])
+            return f"✅ 已修改第 {index} 条\n{parsed['description']}：{parsed['amount']:.2f} 元\n分类：{parsed['category']}"
+        except Exception as e:
+            print(f"修改记录失败: {str(e)[:100]}")
+            return "❌ 修改失败，请稍后重试"
+
+    elif parsed["type"] == "record_delete":
+        try:
+            records = get_records(limit=20)
+            index = parsed["index"]
+            if index < 1 or index > len(records):
+                return "❌ 编号无效，请先发送「明细」查看编号"
+            record = records[index - 1]
+            delete_record(record["id"])
+            return f"✅ 已删除第 {index} 条：{record['description']} {record['amount']:.2f} 元"
+        except Exception as e:
+            print(f"删除记录失败: {str(e)[:100]}")
+            return "❌ 删除失败，请稍后重试"
     
     elif parsed["type"] == "query":
         try:
@@ -362,6 +632,47 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             print(f"分类查询失败: {str(e)[:100]}")
             return "❌ 查询失败，请稍后重试"
     
+    elif parsed["type"] == "debt_add":
+        try:
+            new_amount = add_debt(parsed["name"], parsed["amount"], parsed.get("note", ""))
+            note_text = f"\n备注：{parsed['note']}" if parsed.get("note") else ""
+            return f"✅ 已记录：{parsed['name']} 欠你 {parsed['amount']:.2f} 元{note_text}\n当前欠款：{new_amount:.2f} 元"
+        except Exception as e:
+            print(f"外债记录失败: {str(e)[:100]}")
+            return "❌ 外债记录失败，请稍后重试"
+
+    elif parsed["type"] == "debt_repay":
+        try:
+            result = repay_debt(parsed["name"], parsed["amount"])
+            if result.get("error") == "not_found":
+                return f"❌ 未找到 {parsed['name']} 的欠款记录"
+            if result.get("error") == "overpay":
+                return f"❌ {parsed['name']} 当前欠款 {result['balance']:.2f} 元，本次还款超出，请修改金额"
+            if result["status"] == "paid":
+                return f"✅ 还钱 {parsed['name']} {parsed['amount']:.2f} 元\n{parsed['name']} 已还清"
+            return f"✅ 还钱 {parsed['name']} {parsed['amount']:.2f} 元\n剩余欠款 {result['balance']:.2f} 元"
+        except Exception as e:
+            print(f"外债还款失败: {str(e)[:100]}")
+            return "❌ 还款失败，请稍后重试"
+
+    elif parsed["type"] == "debt_query_all":
+        try:
+            debts = list_debts()
+            return format_debts(debts)
+        except Exception as e:
+            print(f"外债查询失败: {str(e)[:100]}")
+            return "❌ 外债查询失败，请稍后重试"
+
+    elif parsed["type"] == "debt_query_person":
+        try:
+            debt = get_debt(parsed["name"])
+            if not debt or float(debt.get("amount", 0)) <= 0:
+                return f"📌 {parsed['name']} 当前无欠款"
+            return f"📌 {parsed['name']} 当前欠款：{float(debt['amount']):.2f} 元"
+        except Exception as e:
+            print(f"外债单人查询失败: {str(e)[:100]}")
+            return "❌ 外债查询失败，请稍后重试"
+
     elif parsed["type"] == "detail":
         try:
             records = get_records()
