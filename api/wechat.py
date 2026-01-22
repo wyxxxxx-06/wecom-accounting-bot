@@ -465,6 +465,17 @@ def parse_record_text(text: str) -> dict:
             "category": category.strip()
         }
 
+    # 描述 金额（按描述自动分组）
+    simple_match = re.match(r'^(\S+)\s+(\d+(?:\.\d+)?)$', text)
+    if simple_match:
+        desc, amount = simple_match.groups()
+        return {
+            "type": "record",
+            "amount": float(amount),
+            "description": desc.strip(),
+            "category": desc.strip()
+        }
+
     # 记账：尝试解析金额
     patterns = [
         r'^(.+?)\s+(\d+(?:\.\d+)?)\s*(.*)$',  # 描述 金额 [分类]
@@ -480,19 +491,19 @@ def parse_record_text(text: str) -> dict:
             if i == 0:  # 描述 金额 [分类]
                 desc, amount, extra = groups
                 amount = float(amount)
-                category = extra.strip() if extra.strip() in CATEGORY_KEYWORDS else parse_category(desc)
+                category = extra.strip() if extra.strip() else desc.strip()
             elif i == 1:  # 金额 描述
                 amount, desc = groups
                 amount = float(amount)
-                category = parse_category(desc)
+                category = desc.strip()
             elif i == 2:  # 描述金额
                 desc, amount = groups
                 amount = float(amount)
-                category = parse_category(desc)
+                category = desc.strip()
             else:  # 金额描述
                 amount, desc = groups
                 amount = float(amount)
-                category = parse_category(desc)
+                category = desc.strip()
 
             return {
                 "type": "record",
@@ -556,9 +567,9 @@ def parse_message(content: str) -> dict:
             }
         return {"type": "unknown"}
 
-    delete_match = re.match(r'^(删|删除)\s+(\d+)$', content)
+    delete_match = re.match(r'^(删|删除)\s+(.+)$', content)
     if delete_match:
-        return {"type": "record_delete", "index": int(delete_match.group(2))}
+        return {"type": "record_delete", "raw": delete_match.group(2).strip()}
 
     # 外债相关
     debt_add_match = re.match(r'^欠款\s+(\S+)\s+(\d+(?:\.\d+)?)\s*(.*)$', content)
@@ -618,14 +629,15 @@ def get_date_range(period: str):
     return None, None
 
 
-def format_statistics(stats: dict, period_name: str) -> str:
+def format_statistics(stats: dict, period_name: str, start_date: datetime, end_date: datetime) -> str:
     """格式化统计信息"""
     if stats["count"] == 0:
         return f"📊 {period_name}暂无记录"
     
+    range_text = f"{start_date.strftime('%m-%d')} ~ {end_date.strftime('%m-%d')}"
     avg = stats["total"] / stats["count"] if stats["count"] else 0
     lines = [
-        f"📊 {period_name}统计（共同）",
+        f"📊 {period_name}统计（{range_text}）",
         f"💰 总支出：{stats['total']:.2f} 元",
         f"🧾 记录数：{stats['count']} 条",
         f"📉 平均单笔：{avg:.2f} 元",
@@ -703,17 +715,44 @@ def verify_export_signature(openid: str, period: str, ts: str, sig: str) -> bool
     return hmac.compare_digest(expected, sig)
 
 
-def build_export_excel_bytes(records: list, limit: int = 1000) -> bytes:
+def build_export_excel_bytes(records: list, start_date: datetime, end_date: datetime, limit: int = 1000) -> bytes:
     """导出 Excel（二进制）"""
     wb = Workbook()
     ws = wb.active
-    ws.title = "records"
-    ws.append(["日期", "描述", "金额", "分类"])
+    ws.title = "统计"
 
+    # 期间与类目统计
+    ws.append(["统计区间", f"{start_date.strftime('%m-%d')} ~ {end_date.strftime('%m-%d')}"])
+    ws.append([])
+
+    category_totals = {}
+    daily_totals = {}
     for r in records[:limit]:
         dt = to_local_datetime(r["created_at"])
-        date_str = dt.strftime("%Y-%m-%d %H:%M")
+        day_key = dt.strftime("%m-%d")
+        category = r["category"]
+        amount = float(r["amount"])
+        category_totals[category] = category_totals.get(category, 0) + amount
+        daily_totals[day_key] = daily_totals.get(day_key, 0) + amount
+
+    ws.append(["类目统计"])
+    ws.append(["类目", "金额"])
+    for cat, amount in sorted(category_totals.items(), key=lambda x: -x[1]):
+        ws.append([cat, round(amount, 2)])
+
+    ws.append([])
+    ws.append(["每天明细"])
+    ws.append(["日期", "描述", "金额", "分类"])
+    for r in records[:limit]:
+        dt = to_local_datetime(r["created_at"])
+        date_str = dt.strftime("%m-%d")
         ws.append([date_str, r["description"], float(r["amount"]), r["category"]])
+
+    ws.append([])
+    ws.append(["每日合计"])
+    ws.append(["日期", "金额"])
+    for day, amount in sorted(daily_totals.items()):
+        ws.append([day, round(amount, 2)])
 
     bio = io.BytesIO()
     wb.save(bio)
@@ -809,13 +848,37 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
 
     elif parsed["type"] == "record_delete":
         try:
-            records = get_records(limit=20)
-            index = parsed["index"]
-            if index < 1 or index > len(records):
+            def parse_indices(raw: str) -> list:
+                raw = raw.replace("，", ",").replace(" ", "")
+                parts = [p for p in raw.split(",") if p]
+                indices = []
+                for part in parts:
+                    if "-" in part:
+                        start, end = part.split("-", 1)
+                        if start.isdigit() and end.isdigit():
+                            s = int(start)
+                            e = int(end)
+                            if s <= e:
+                                indices.extend(list(range(s, e + 1)))
+                    elif part.isdigit():
+                        indices.append(int(part))
+                return sorted(set(indices))
+
+            indices = parse_indices(parsed["raw"])
+            if not indices:
+                return "❌ 格式错误，示例：删 2 或 删 1,3,5 或 删 1-4"
+
+            records = get_records(limit=50)
+            max_index = len(records)
+            invalid = [i for i in indices if i < 1 or i > max_index]
+            if invalid:
                 return "❌ 编号无效，请先发送「明细」查看编号"
-            record = records[index - 1]
-            delete_record(record["id"])
-            return f"✅ 已删除第 {index} 条：{record['description']} {record['amount']:.2f} 元"
+
+            for i in indices:
+                record = records[i - 1]
+                delete_record(record["id"])
+
+            return f"✅ 已删除 {len(indices)} 条记录"
         except Exception as e:
             print(f"删除记录失败: {str(e)[:100]}")
             return "❌ 删除失败，请稍后重试"
@@ -833,14 +896,14 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 "month": "本月"
             }
             stats = get_statistics(start_date=start_date, end_date=end_date)
-            return format_statistics(stats, period_names[parsed["period"]])
+            return format_statistics(stats, period_names[parsed["period"]], start_date, end_date)
         except Exception as e:
             print(f"查询失败: {str(e)[:100]}")
             return "❌ 查询失败，请稍后重试"
     
     elif parsed["type"] == "query_category":
         try:
-            now = datetime.now()
+            now = datetime.now(LOCAL_TZ)
             month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             records = get_records(start_date=month_start, category=parsed["category"])
             total = sum(r["amount"] for r in records)
@@ -916,7 +979,7 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
 
     elif parsed["type"] == "detail":
         try:
-            cutoff = datetime.now() - timedelta(days=RETENTION_DAYS)
+            cutoff = datetime.now(LOCAL_TZ) - timedelta(days=RETENTION_DAYS)
             records = get_records(start_date=cutoff)
             return format_records(records, limit=20) + f"\n\n仅展示近 {RETENTION_DAYS} 天明细"
         except Exception as e:
@@ -1043,7 +1106,7 @@ async def export_excel(request: Request):
 
         start_date, end_date = get_date_range(period)
         records = get_records(start_date=start_date, end_date=end_date)
-        data = build_export_excel_bytes(records)
+        data = build_export_excel_bytes(records, start_date, end_date)
         filename = f"records-{period}.xlsx"
         headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
         return StreamingResponse(io.BytesIO(data),
