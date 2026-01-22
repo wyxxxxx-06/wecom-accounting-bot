@@ -2,6 +2,8 @@
 微信公众号记账机器人 - Webhook 入口
 """
 import os
+import io
+import hmac
 import hashlib
 import time
 import json
@@ -9,6 +11,8 @@ from datetime import datetime, timedelta
 from urllib.parse import unquote
 
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
 import httpx
 
 app = FastAPI()
@@ -19,8 +23,10 @@ APPSECRET = os.environ.get("WECHAT_APPSECRET", "")
 TOKEN = os.environ.get("WECHAT_TOKEN", "")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 RETENTION_DAYS = 38
 ARCHIVE_BATCH = 200
+EXPORT_TTL_SECONDS = 600
 
 # ============ 分类关键词映射 ============
 CATEGORY_KEYWORDS = {
@@ -514,10 +520,15 @@ def parse_message(content: str) -> dict:
         return {"type": "help"}
 
     # 导出
+    export_excel_match = re.match(r'^(导出excel|导出Excel|导出表格)\s*(.*)$', content)
+    if export_excel_match:
+        target = export_excel_match.group(2)
+        return {"type": "export", "target": target.strip() if target else ""}
+
     export_match = re.match(r'^导出(?:\s+(.+))?$', content)
     if export_match:
         target = export_match.group(1)
-        return {"type": "export", "target": target.strip() if target else "", "format": "csv"}
+        return {"type": "export", "target": target.strip() if target else ""}
 
     # 记录修改/删除
     edit_match = re.match(r'^(改|修改)\s+(\d+)\s+(.+)$', content)
@@ -653,24 +664,51 @@ def format_records(records: list, limit: int = 20) -> str:
     return "\n".join(lines)
 
 
-def format_export_csv(records: list, limit: int = 200) -> str:
-    """导出 CSV 文本"""
-    if not records:
-        return "导出结果：暂无记录"
+def build_export_signature(openid: str, period: str, ts: int) -> str:
+    """生成导出链接签名"""
+    payload = f"{openid}|{period}|{ts}"
+    return hmac.new(TOKEN.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
 
-    header = "日期,描述,金额,分类"
-    lines = [header]
+
+def build_export_link(openid: str, period: str) -> str:
+    """生成导出 Excel 的临时链接"""
+    if not PUBLIC_BASE_URL:
+        return ""
+    ts = int(time.time())
+    sig = build_export_signature(openid, period, ts)
+    return f"{PUBLIC_BASE_URL}/api/export?openid={openid}&period={period}&ts={ts}&sig={sig}"
+
+
+def verify_export_signature(openid: str, period: str, ts: str, sig: str) -> bool:
+    """校验导出链接签名与有效期"""
+    if not openid or not period or not ts or not sig:
+        return False
+    try:
+        ts_int = int(ts)
+    except ValueError:
+        return False
+    if abs(int(time.time()) - ts_int) > EXPORT_TTL_SECONDS:
+        return False
+    expected = build_export_signature(openid, period, ts_int)
+    return hmac.compare_digest(expected, sig)
+
+
+def build_export_excel_bytes(records: list, limit: int = 1000) -> bytes:
+    """导出 Excel（二进制）"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "records"
+    ws.append(["日期", "描述", "金额", "分类"])
+
     for r in records[:limit]:
         dt = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
         date_str = dt.strftime("%Y-%m-%d %H:%M")
-        desc = str(r["description"]).replace(",", " ")
-        line = f"{date_str},{desc},{float(r['amount']):.2f},{r['category']}"
-        lines.append(line)
+        ws.append([date_str, r["description"], float(r["amount"]), r["category"]])
 
-    if len(records) > limit:
-        lines.append(f"# 已截断，仅导出前 {limit} 条")
-
-    return "\n".join(lines)
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return bio.read()
 
 
 def format_debts(debts: list) -> str:
@@ -717,8 +755,9 @@ def get_help_text() -> str:
 外债
 外债 张三
 
-【导出明细】
+【导出Excel】
 发送：导出 今日 / 昨日 / 七天 / 半个月 / 一个月
+发送：导出表格 今日 / 昨日 / 七天 / 半个月 / 一个月
 
 💡 所有记录共同统计，支持多人使用"""
 
@@ -892,9 +931,10 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 "本月": "month"
             }
             period_key = mapping.get(target, "month")
-            start_date, end_date = get_date_range(period_key)
-            records = get_records(start_date=start_date, end_date=end_date)
-            return format_export_csv(records)
+            export_link = build_export_link(openid, period_key)
+            if not export_link:
+                return "❌ 未配置导出地址，请先设置 PUBLIC_BASE_URL"
+            return f"📥 Excel 导出链接（10分钟内有效）：\n{export_link}"
         except Exception as e:
             print(f"导出失败: {str(e)[:100]}")
             return "❌ 导出失败，请稍后重试"
@@ -976,3 +1016,29 @@ async def webhook(request: Request):
     except Exception as e:
         print(f"处理消息错误: {str(e)[:100]}")
         return Response(content="success", media_type="text/plain")
+
+
+@app.get("/api/export")
+async def export_excel(request: Request):
+    """导出 Excel"""
+    try:
+        params = dict(request.query_params)
+        openid = params.get("openid", "")
+        period = params.get("period", "")
+        ts = params.get("ts", "")
+        sig = params.get("sig", "")
+
+        if not verify_export_signature(openid, period, ts, sig):
+            return Response(content="invalid", status_code=403)
+
+        start_date, end_date = get_date_range(period)
+        records = get_records(start_date=start_date, end_date=end_date)
+        data = build_export_excel_bytes(records)
+        filename = f"records-{period}.xlsx"
+        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+        return StreamingResponse(io.BytesIO(data),
+                                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                 headers=headers)
+    except Exception as e:
+        print(f"导出错误: {str(e)[:100]}")
+        return Response(content="error", status_code=500)
