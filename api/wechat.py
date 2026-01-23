@@ -31,6 +31,7 @@ RETENTION_DAYS = 38
 ARCHIVE_BATCH = 200
 EXPORT_TTL_SECONDS = 600
 LOCAL_TZ = ZoneInfo("Asia/Shanghai")
+UTC_TZ = ZoneInfo("UTC")
 PENDING_DELETE_TTL = 300  # 秒
 
 # 待确认删除（内存，按 openid）
@@ -211,9 +212,9 @@ def get_records(start_date: datetime = None, end_date: datetime = None, category
         query = supabase.table("records").select("*")
         
         if start_date:
-            query = query.gte("created_at", start_date.isoformat())
+            query = query.gte("created_at", to_utc_iso(start_date))
         if end_date:
-            query = query.lte("created_at", end_date.isoformat())
+            query = query.lte("created_at", to_utc_iso(end_date))
         if category:
             query = query.eq("category", category)
         
@@ -234,9 +235,9 @@ def get_records_by_keyword(start_date: datetime = None, end_date: datetime = Non
         query = supabase.table("records").select("*")
 
         if start_date:
-            query = query.gte("created_at", start_date.isoformat())
+            query = query.gte("created_at", to_utc_iso(start_date))
         if end_date:
-            query = query.lte("created_at", end_date.isoformat())
+            query = query.lte("created_at", to_utc_iso(end_date))
         if keyword:
             query = query.ilike("description", f"*{keyword}*")
 
@@ -301,8 +302,15 @@ def to_local_datetime(value: str) -> datetime:
     """解析并转为北京时间"""
     dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(LOCAL_TZ)
+        return dt.replace(tzinfo=UTC_TZ).astimezone(LOCAL_TZ)
     return dt.astimezone(LOCAL_TZ)
+
+
+def to_utc_iso(dt: datetime) -> str:
+    """将时间转为 UTC ISO 字符串"""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=LOCAL_TZ)
+    return dt.astimezone(UTC_TZ).isoformat()
 
 
 def normalize_dash(text: str) -> str:
@@ -623,8 +631,8 @@ def parse_category(text: str) -> str:
 
 def parse_record_text(text: str) -> dict:
     """解析记账文本，返回 dict 或 unknown"""
-    import re
     text = text.strip()
+    text = re.sub(r'(\d+(?:\.\d+)?)(块钱|块|元|rmb|RMB)', r'\1', text)
 
     # 分类 描述 金额（手动分类优先）
     explicit_match = re.match(r'^(\S+)\s+(.+?)\s+(\d+(?:\.\d+)?)$', text)
@@ -1101,6 +1109,36 @@ def get_help_text() -> str:
 # ============ 处理消息 ============
 def handle_message(openid: str, nickname: str, content: str) -> str:
     """处理用户消息，返回回复内容"""
+    # 批量记账：一行一条
+    if "批量" in content or "\n" in content or "；" in content or ";" in content:
+        raw = content.replace("批量", "").strip()
+        raw = raw.replace("；", "\n").replace(";", "\n")
+        lines = [l.strip() for l in raw.splitlines() if l.strip()]
+        if len(lines) >= 2:
+            success = 0
+            failed = []
+            for line in lines:
+                parsed_line = parse_record_text(line)
+                if parsed_line["type"] == "record":
+                    try:
+                        add_record(
+                            openid=openid,
+                            nickname=nickname,
+                            amount=parsed_line["amount"],
+                            category=parsed_line["category"],
+                            description=parsed_line["description"]
+                        )
+                        success += 1
+                    except Exception:
+                        failed.append(line)
+                else:
+                    failed.append(line)
+
+            msg = f"✅ 批量记账完成：成功{success}条"
+            if failed:
+                msg += f"\n❌ 失败{len(failed)}条：\n" + "\n".join(failed[:5])
+            return msg
+
     parsed = parse_message(content)
     
     if parsed["type"] == "help":
