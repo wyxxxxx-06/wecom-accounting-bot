@@ -7,6 +7,7 @@ import hmac
 import hashlib
 import time
 import json
+import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from urllib.parse import unquote
@@ -300,7 +301,7 @@ def to_local_datetime(value: str) -> datetime:
     """解析并转为北京时间"""
     dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=LOCAL_TZ)
+        return dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(LOCAL_TZ)
     return dt.astimezone(LOCAL_TZ)
 
 
@@ -1437,7 +1438,7 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
 
     elif parsed["type"] == "detail":
         try:
-            period = parsed.get("period", "today")
+            period = normalize_dash(parsed.get("period", "today"))
             if period in ["今天", "今日"]:
                 start_date, end_date = get_date_range("today")
             elif period in ["昨天", "昨日"]:
@@ -1529,6 +1530,12 @@ async def verify(request: Request):
 async def health():
     """健康检查（保活用）"""
     return Response(content="ok", media_type="text/plain")
+
+
+@app.head("/api/health")
+async def health_head():
+    """健康检查（HEAD）"""
+    return Response(content="", status_code=200)
 
 
 @app.post("/api/wechat")
