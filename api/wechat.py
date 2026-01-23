@@ -785,7 +785,7 @@ def parse_message(content: str) -> dict:
             }
         return {"type": "unknown"}
 
-    delete_match = re.match(r'^(删|删除)\s+(.+)$', content)
+    delete_match = re.match(r'^(删|删除)\s*(.+)$', content)
     if delete_match:
         return {"type": "record_delete", "raw": delete_match.group(2).strip()}
 
@@ -1193,10 +1193,11 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
 
             def parse_indices(raw: str) -> list:
                 raw = normalize_dash(raw)
-                raw = raw.replace("，", ",").replace(" ", "")
-                parts = [p for p in raw.split(",") if p]
+                raw = raw.replace("，", ",")
+                matches = re.findall(r'\d+\s*-\s*\d+|\d+', raw)
                 indices = []
-                for part in parts:
+                for part in matches:
+                    part = part.replace(" ", "")
                     if "-" in part:
                         start, end = part.split("-", 1)
                         if start.isdigit() and end.isdigit():
