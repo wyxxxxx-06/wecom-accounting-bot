@@ -189,7 +189,7 @@ def add_record(openid: str, nickname: str, amount: float, category: str, descrip
     try:
         archive_old_records()
         supabase = get_supabase_client()
-        created_at_value = (created_at or datetime.now(LOCAL_TZ)).isoformat()
+        created_at_value = to_utc_iso(created_at or datetime.now(LOCAL_TZ))
         data = {
             "openid": openid,
             "nickname": nickname,
@@ -214,7 +214,7 @@ def get_records(start_date: datetime = None, end_date: datetime = None, category
         if start_date:
             query = query.gte("created_at", to_utc_iso(start_date))
         if end_date:
-            query = query.lte("created_at", to_utc_iso(end_date))
+            query = query.lt("created_at", to_utc_iso(end_date))
         if category:
             query = query.eq("category", category)
         
@@ -237,7 +237,7 @@ def get_records_by_keyword(start_date: datetime = None, end_date: datetime = Non
         if start_date:
             query = query.gte("created_at", to_utc_iso(start_date))
         if end_date:
-            query = query.lte("created_at", to_utc_iso(end_date))
+            query = query.lt("created_at", to_utc_iso(end_date))
         if keyword:
             query = query.ilike("description", f"*{keyword}*")
 
@@ -862,11 +862,10 @@ def get_date_range(period: str):
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     
     if period == "today":
-        return today_start, now
+        return today_start, today_start + timedelta(days=1)
     elif period == "yesterday":
         yesterday_start = today_start - timedelta(days=1)
-        yesterday_end = today_start - timedelta(seconds=1)
-        return yesterday_start, yesterday_end
+        return yesterday_start, today_start
     elif period == "7days":
         return now - timedelta(days=7), now
     elif period == "15days":
@@ -1270,7 +1269,7 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 dt = parse_date_token(period_token)
                 if dt:
                     start_date = dt
-                    end_date = dt + timedelta(days=1) - timedelta(seconds=1)
+                    end_date = dt + timedelta(days=1)
 
             records = get_records(start_date=start_date, end_date=end_date, limit=50)
             max_index = len(records)
@@ -1497,7 +1496,7 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 if not dt:
                     return "❌ 明细日期格式错误，示例：明细 昨天 / 明细 01-21"
                 start_date = dt
-                end_date = dt + timedelta(days=1) - timedelta(seconds=1)
+                end_date = dt + timedelta(days=1)
 
             records = get_records(start_date=start_date, end_date=end_date)
             return format_records(records, limit=20)
