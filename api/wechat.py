@@ -177,18 +177,19 @@ def get_supabase_client():
     return SupabaseClient(SUPABASE_URL, SUPABASE_KEY)
 
 
-def add_record(openid: str, nickname: str, amount: float, category: str, description: str):
+def add_record(openid: str, nickname: str, amount: float, category: str, description: str, created_at: datetime = None):
     """添加记账记录"""
     try:
         archive_old_records()
         supabase = get_supabase_client()
+        created_at_value = (created_at or datetime.now(LOCAL_TZ)).isoformat()
         data = {
             "openid": openid,
             "nickname": nickname,
             "amount": amount,
             "category": category,
             "description": description,
-            "created_at": datetime.now(LOCAL_TZ).isoformat()
+            "created_at": created_at_value
         }
         result = supabase.table("records").insert(data).execute()
         return result
@@ -280,6 +281,33 @@ def to_local_datetime(value: str) -> datetime:
     return dt.astimezone(LOCAL_TZ)
 
 
+def parse_date_token(token: str) -> datetime:
+    """解析日期标记（支持 今天/昨天/本月/本周/MM-DD）"""
+    now = datetime.now(LOCAL_TZ)
+    if token in ["今天", "今日"]:
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if token in ["昨天", "昨日"]:
+        return (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    if token == "本周":
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return today_start - timedelta(days=today_start.weekday())
+    if token == "本月":
+        return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    if "-" in token:
+        try:
+            month, day = token.split("-", 1)
+            month = int(month)
+            day = int(day)
+            dt = now.replace(month=month, day=day, hour=0, minute=0, second=0, microsecond=0)
+            if dt > now:
+                dt = dt.replace(year=dt.year - 1)
+            return dt
+        except Exception:
+            return None
+    return None
+
+
 def update_record(record_id: int, amount: float, category: str, description: str):
     """更新记账记录"""
     supabase = get_supabase_client()
@@ -295,6 +323,60 @@ def delete_record(record_id: int):
     """删除记账记录"""
     supabase = get_supabase_client()
     return supabase.table("records").delete().eq("id", record_id).execute()
+
+
+def archive_deleted_record(record: dict, deleted_by: str):
+    """保存已删除记录到回收站"""
+    supabase = get_supabase_client()
+    data = {
+        "original_id": record["id"],
+        "deleted_by": deleted_by,
+        "openid": record.get("openid", ""),
+        "nickname": record.get("nickname", ""),
+        "amount": record.get("amount", 0),
+        "category": record.get("category", ""),
+        "description": record.get("description", ""),
+        "created_at": record.get("created_at", ""),
+        "deleted_at": datetime.now(LOCAL_TZ).isoformat()
+    }
+    supabase.table("records_deleted").insert(data).execute()
+
+
+def get_deleted_records(deleted_by: str, limit: int = 10):
+    """获取回收站记录"""
+    try:
+        supabase = get_supabase_client()
+        result = (
+            supabase.table("records_deleted")
+            .select("*")
+            .eq("deleted_by", deleted_by)
+            .order("deleted_at", desc=True)
+            .execute()
+        )
+        return result.data[:limit]
+    except Exception as e:
+        print(f"回收站查询错误: {str(e)[:100]}")
+        return []
+
+
+def restore_deleted_record(deleted_by: str, index: int):
+    """从回收站恢复记录"""
+    supabase = get_supabase_client()
+    records = get_deleted_records(deleted_by, limit=20)
+    if index < 1 or index > len(records):
+        return {"error": "invalid"}
+    record = records[index - 1]
+    insert_data = {
+        "openid": record.get("openid", ""),
+        "nickname": record.get("nickname", ""),
+        "amount": record.get("amount", 0),
+        "category": record.get("category", ""),
+        "description": record.get("description", ""),
+        "created_at": record.get("created_at", "")
+    }
+    supabase.table("records").insert(insert_data).execute()
+    supabase.table("records_deleted").delete().eq("id", record["id"]).execute()
+    return {"restored": record}
 
 
 def get_daily_total(record_date: str):
@@ -536,7 +618,9 @@ def parse_message(content: str) -> dict:
     if content in ["本月", "这个月"]:
         return {"type": "query", "period": "month"}
     if content in ["明细", "详情", "记录"]:
-        return {"type": "detail"}
+        return {"type": "detail", "period": "today"}
+    if content.startswith("明细 "):
+        return {"type": "detail", "period": content.split(maxsplit=1)[1].strip()}
     if content in ["帮助", "help", "?"]:
         return {"type": "help"}
     if content == "统计":
@@ -552,6 +636,22 @@ def parse_message(content: str) -> dict:
     if export_match:
         target = export_match.group(1)
         return {"type": "export", "target": target.strip() if target else ""}
+
+    # 补记（昨天/日期）
+    backfill_match = re.match(r'^补记\s+(\S+)\s+(.+)$', content)
+    if backfill_match:
+        date_token = backfill_match.group(1).strip()
+        rest = backfill_match.group(2).strip()
+        parsed = parse_record_text(rest)
+        if parsed["type"] == "record":
+            return {
+                "type": "record_backfill",
+                "date_token": date_token,
+                "amount": parsed["amount"],
+                "description": parsed["description"],
+                "category": parsed["category"]
+            }
+        return {"type": "unknown"}
 
     # 记录修改/删除
     edit_match = re.match(r'^(改|修改)\s+(\d+)\s+(.+)$', content)
@@ -572,6 +672,13 @@ def parse_message(content: str) -> dict:
     delete_match = re.match(r'^(删|删除)\s+(.+)$', content)
     if delete_match:
         return {"type": "record_delete", "raw": delete_match.group(2).strip()}
+
+    if content == "回收站":
+        return {"type": "deleted_list"}
+
+    restore_match = re.match(r'^恢复\s+(\d+)$', content)
+    if restore_match:
+        return {"type": "restore_deleted", "index": int(restore_match.group(1))}
 
     # 外债相关（我欠别人）
     debt_add_match = re.match(r'^欠\s+(\S+)\s+(\d+(?:\.\d+)?)\s*(.*)$', content)
@@ -786,11 +893,15 @@ def get_help_text() -> str:
 发送：今日 / 昨日 / 七天 / 半个月 / 一个月 / 本周 / 本月
 
 【查看明细】
-发送：明细
+发送：明细 / 明细 昨天 / 明细 01-21
 
 【修改/删除记录】
 发送：改 1 夜宵 鸡锁骨 16
-发送：删 2
+发送：删 2 / 删 1-4 / 删 昨天 1-3
+发送：回收站 / 恢复 1
+【补记】
+发送：补记 昨天 买烟 50
+发送：补记 01-21 买烟 50
 
 【按分类查询】
 发送：分类 夜宵 / 统计 夜宵
@@ -830,6 +941,28 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             print(f"记账失败: {str(e)[:100]}")
             return "❌ 记账失败，请稍后重试"
 
+    elif parsed["type"] == "record_backfill":
+        try:
+            dt = parse_date_token(parsed["date_token"])
+            if not dt:
+                return "❌ 日期格式错误，示例：补记 昨天 买烟 50 或 补记 01-21 买烟 50"
+            add_record(
+                openid=openid,
+                nickname=nickname,
+                amount=parsed["amount"],
+                category=parsed["category"],
+                description=parsed["description"],
+                created_at=dt
+            )
+            return (
+                f"✅ 补记成功（{parsed['date_token']}）\n"
+                f"{parsed['description']}：{parsed['amount']:.2f} 元\n"
+                f"分类：{parsed['category']}"
+            )
+        except Exception as e:
+            print(f"补记失败: {str(e)[:100]}")
+            return "❌ 补记失败，请稍后重试"
+
     elif parsed["type"] == "record_edit":
         try:
             records = get_records(limit=20)
@@ -863,11 +996,30 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                         indices.append(int(part))
                 return sorted(set(indices))
 
-            indices = parse_indices(parsed["raw"])
+            raw = parsed["raw"]
+            tokens = raw.split()
+            period_token = "今天"
+            if tokens and tokens[0] in ["今天", "今日", "昨天", "昨日", "本周", "本月"] or ("-" in tokens[0]):
+                period_token = tokens[0]
+                raw = " ".join(tokens[1:]).strip()
+            indices = parse_indices(raw)
             if not indices:
-                return "❌ 格式错误，示例：删 2 或 删 1,3,5 或 删 1-4"
+                return "❌ 格式错误，示例：删 2 或 删 1,3,5 或 删 1-4 或 删 昨天 1-3"
 
-            records = get_records(limit=50)
+            start_date, end_date = get_date_range("today")
+            if period_token in ["昨天", "昨日"]:
+                start_date, end_date = get_date_range("yesterday")
+            elif period_token == "本周":
+                start_date, end_date = get_date_range("week")
+            elif period_token == "本月":
+                start_date, end_date = get_date_range("month")
+            elif "-" in period_token:
+                dt = parse_date_token(period_token)
+                if dt:
+                    start_date = dt
+                    end_date = dt + timedelta(days=1) - timedelta(seconds=1)
+
+            records = get_records(start_date=start_date, end_date=end_date, limit=50)
             max_index = len(records)
             invalid = [i for i in indices if i < 1 or i > max_index]
             if invalid:
@@ -876,6 +1028,7 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             deleted = 0
             for i in indices:
                 record = records[i - 1]
+                archive_deleted_record(record, deleted_by=openid)
                 result = delete_record(record["id"])
                 if getattr(result, "data", []):
                     deleted += 1
@@ -886,6 +1039,33 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
         except Exception as e:
             print(f"删除记录失败: {str(e)[:100]}")
             return "❌ 删除失败，请稍后重试"
+
+    elif parsed["type"] == "deleted_list":
+        try:
+            deleted = get_deleted_records(openid, limit=10)
+            if not deleted:
+                return "🗑️ 回收站为空"
+            lines = ["🗑️ 回收站（最近10条）："]
+            for i, r in enumerate(deleted, start=1):
+                dt = to_local_datetime(r["created_at"])
+                date_str = dt.strftime("%m-%d %H:%M")
+                lines.append(f"{i}. {date_str} {r['description']} {float(r['amount']):.2f}元 [{r['category']}]")
+            lines.append("发送：恢复 1 进行恢复")
+            return "\n".join(lines)
+        except Exception as e:
+            print(f"回收站失败: {str(e)[:100]}")
+            return "❌ 回收站查询失败"
+
+    elif parsed["type"] == "restore_deleted":
+        try:
+            result = restore_deleted_record(openid, parsed["index"])
+            if result.get("error") == "invalid":
+                return "❌ 编号无效，请先发送「回收站」查看编号"
+            record = result["restored"]
+            return f"✅ 已恢复：{record['description']} {float(record['amount']):.2f}元"
+        except Exception as e:
+            print(f"恢复失败: {str(e)[:100]}")
+            return "❌ 恢复失败，请稍后重试"
     
     elif parsed["type"] == "query":
         try:
@@ -985,9 +1165,30 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
 
     elif parsed["type"] == "detail":
         try:
-            cutoff = datetime.now(LOCAL_TZ) - timedelta(days=RETENTION_DAYS)
-            records = get_records(start_date=cutoff)
-            return format_records(records, limit=20) + f"\n\n仅展示近 {RETENTION_DAYS} 天明细"
+            period = parsed.get("period", "today")
+            if period in ["今天", "今日"]:
+                start_date, end_date = get_date_range("today")
+            elif period in ["昨天", "昨日"]:
+                start_date, end_date = get_date_range("yesterday")
+            elif period in ["七天", "近七天"]:
+                start_date, end_date = get_date_range("7days")
+            elif period in ["半个月", "十五天", "近半个月"]:
+                start_date, end_date = get_date_range("15days")
+            elif period in ["一个月", "近一个月", "30天"]:
+                start_date, end_date = get_date_range("30days")
+            elif period == "本周":
+                start_date, end_date = get_date_range("week")
+            elif period == "本月":
+                start_date, end_date = get_date_range("month")
+            else:
+                dt = parse_date_token(period)
+                if not dt:
+                    return "❌ 明细日期格式错误，示例：明细 昨天 / 明细 01-21"
+                start_date = dt
+                end_date = dt + timedelta(days=1) - timedelta(seconds=1)
+
+            records = get_records(start_date=start_date, end_date=end_date)
+            return format_records(records, limit=20)
         except Exception as e:
             print(f"明细查询失败: {str(e)[:100]}")
             return "❌ 查询失败，请稍后重试"
