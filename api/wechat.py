@@ -25,6 +25,7 @@ TOKEN = os.environ.get("WECHAT_TOKEN", "")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+REPORT_TOKEN = os.environ.get("REPORT_TOKEN", "")
 RETENTION_DAYS = 38
 ARCHIVE_BATCH = 200
 EXPORT_TTL_SECONDS = 600
@@ -248,6 +249,24 @@ def get_records_by_keyword(start_date: datetime = None, end_date: datetime = Non
         return []
 
 
+def get_records_by_user(openid: str, limit: int = 1):
+    """获取用户最新记录"""
+    try:
+        supabase = get_supabase_client()
+        result = (
+            supabase.table("records")
+            .select("*")
+            .eq("openid", openid)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return result.data
+    except Exception as e:
+        print(f"用户记录查询错误: {str(e)[:100]}")
+        return []
+
+
 def get_statistics(start_date: datetime = None, end_date: datetime = None):
     """获取统计数据（所有人共同）"""
     records = get_records(start_date, end_date)
@@ -283,6 +302,18 @@ def to_local_datetime(value: str) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=LOCAL_TZ)
     return dt.astimezone(LOCAL_TZ)
+
+
+def normalize_dash(text: str) -> str:
+    """统一分隔符"""
+    return (
+        text.replace("–", "-")
+        .replace("—", "-")
+        .replace("－", "-")
+        .replace("～", "-")
+        .replace("~", "-")
+        .replace("至", "-")
+    )
 
 
 def parse_date_token(token: str) -> datetime:
@@ -524,6 +555,60 @@ def list_debts():
         return []
 
 
+def get_subscription(openid: str, report_type: str):
+    """获取订阅记录"""
+    try:
+        supabase = get_supabase_client()
+        result = (
+            supabase.table("report_subscriptions")
+            .select("*")
+            .eq("openid", openid)
+            .eq("report_type", report_type)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+    except Exception as e:
+        print(f"订阅查询错误: {str(e)[:100]}")
+        return None
+
+
+def subscribe_report(openid: str, report_type: str):
+    """订阅周报/月报"""
+    supabase = get_supabase_client()
+    now = datetime.now(LOCAL_TZ).isoformat()
+    existing = get_subscription(openid, report_type)
+    if existing:
+        return True
+    supabase.table("report_subscriptions").insert({
+        "openid": openid,
+        "report_type": report_type,
+        "created_at": now
+    }).execute()
+    return True
+
+
+def unsubscribe_report(openid: str, report_type: str):
+    """取消订阅"""
+    supabase = get_supabase_client()
+    supabase.table("report_subscriptions").delete().eq("openid", openid).eq("report_type", report_type).execute()
+
+
+def list_subscribers(report_type: str):
+    """获取订阅用户列表"""
+    try:
+        supabase = get_supabase_client()
+        result = (
+            supabase.table("report_subscriptions")
+            .select("*")
+            .eq("report_type", report_type)
+            .execute()
+        )
+        return [r["openid"] for r in result.data]
+    except Exception as e:
+        print(f"订阅列表错误: {str(e)[:100]}")
+        return []
+
+
 # ============ 消息解析 ============
 def parse_category(text: str) -> str:
     """从文本中识别分类"""
@@ -559,6 +644,18 @@ def parse_record_text(text: str) -> dict:
             "type": "record",
             "amount": float(amount),
             "description": desc.strip(),
+            "category": desc.strip()
+        }
+
+    # 描述*数量 金额（数量模式）
+    qty_match = re.match(r'^(\S+)[\*\sxX](\d+)\s+(\d+(?:\.\d+)?)$', text)
+    if qty_match:
+        desc, qty, amount = qty_match.groups()
+        total = float(qty) * float(amount)
+        return {
+            "type": "record",
+            "amount": total,
+            "description": f"{desc}*{qty}",
             "category": desc.strip()
         }
 
@@ -631,6 +728,10 @@ def parse_message(content: str) -> dict:
         return {"type": "record_delete_confirm"}
     if content in ["取消删", "取消删除"]:
         return {"type": "record_delete_cancel"}
+    if content in ["上次", "最近"]:
+        return {"type": "last_record"}
+    if content in ["撤销", "撤销上一条"]:
+        return {"type": "undo_last"}
     if content == "统计":
         return {"type": "query", "period": "7days"}
 
@@ -644,6 +745,13 @@ def parse_message(content: str) -> dict:
     if export_match:
         target = export_match.group(1)
         return {"type": "export", "target": target.strip() if target else ""}
+
+    # 快捷记账
+    if content.startswith("+"):
+        parsed = parse_record_text(content[1:].strip())
+        if parsed["type"] == "record":
+            return parsed
+        return {"type": "unknown"}
 
     # 补记（昨天/日期）
     backfill_match = re.match(r'^补记\s+(\S+)\s+(.+)$', content)
@@ -687,6 +795,10 @@ def parse_message(content: str) -> dict:
     restore_match = re.match(r'^恢复\s+(\d+)$', content)
     if restore_match:
         return {"type": "restore_deleted", "index": int(restore_match.group(1))}
+
+    # 周报/月报订阅
+    if content in ["订阅周报", "订阅月报", "取消周报", "取消月报", "周报", "月报"]:
+        return {"type": "report", "action": content}
 
     # 外债相关（我欠别人）
     debt_add_match = re.match(r'^欠\s+(\S+)\s+(\d+(?:\.\d+)?)\s*(.*)$', content)
@@ -814,6 +926,13 @@ def build_export_link(openid: str, period: str) -> str:
     return f"{PUBLIC_BASE_URL}/api/export?openid={openid}&period={period}&ts={ts}&sig={sig}"
 
 
+def build_report_text(period_key: str, label: str) -> str:
+    """生成统计文本"""
+    start_date, end_date = get_date_range(period_key)
+    stats = get_statistics(start_date=start_date, end_date=end_date)
+    return format_statistics(stats, label, start_date, end_date)
+
+
 def verify_export_signature(openid: str, period: str, ts: str, sig: str) -> bool:
     """校验导出链接签名与有效期"""
     if not openid or not period or not ts or not sig:
@@ -873,6 +992,47 @@ def build_export_excel_bytes(records: list, start_date: datetime, end_date: date
     return bio.read()
 
 
+ACCESS_TOKEN_CACHE = {"value": "", "expires_at": 0}
+
+
+def get_access_token() -> str:
+    """获取公众号 access_token（缓存）"""
+    now = int(time.time())
+    if ACCESS_TOKEN_CACHE["value"] and now < ACCESS_TOKEN_CACHE["expires_at"]:
+        return ACCESS_TOKEN_CACHE["value"]
+
+    if not APPID or not APPSECRET:
+        raise RuntimeError("missing app credentials")
+
+    url = "https://api.weixin.qq.com/cgi-bin/token"
+    params = {"grant_type": "client_credential", "appid": APPID, "secret": APPSECRET}
+    response = httpx.get(url, params=params, timeout=10.0)
+    response.raise_for_status()
+    data = response.json()
+    token = data.get("access_token", "")
+    expires_in = int(data.get("expires_in", 0))
+    if not token:
+        raise RuntimeError("access_token missing")
+    ACCESS_TOKEN_CACHE["value"] = token
+    ACCESS_TOKEN_CACHE["expires_at"] = now + max(0, expires_in - 120)
+    return token
+
+
+def send_text_message(openid: str, text: str) -> bool:
+    """客服消息推送（用户48小时内互动有效）"""
+    token = get_access_token()
+    url = f"https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token={token}"
+    payload = {
+        "touser": openid,
+        "msgtype": "text",
+        "text": {"content": text}
+    }
+    response = httpx.post(url, json=payload, timeout=10.0)
+    response.raise_for_status()
+    data = response.json()
+    return data.get("errcode") == 0
+
+
 def format_debts(debts: list) -> str:
     """格式化外债列表"""
     if not debts:
@@ -925,6 +1085,15 @@ def get_help_text() -> str:
 发送：导出 今日 / 昨日 / 七天 / 半个月 / 一个月
 发送：导出表格 今日 / 昨日 / 七天 / 半个月 / 一个月
 
+【快捷指令】
+发送：+ 买烟 20
+发送：上次 / 撤销
+
+【周报/月报】
+订阅周报 / 订阅月报
+取消周报 / 取消月报
+周报 / 月报
+
 💡 所有记录共同统计，支持多人使用"""
 
 
@@ -949,6 +1118,34 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
         except Exception as e:
             print(f"记账失败: {str(e)[:100]}")
             return "❌ 记账失败，请稍后重试"
+
+    elif parsed["type"] == "last_record":
+        try:
+            records = get_records_by_user(openid, limit=1)
+            if not records:
+                return "📝 暂无记录"
+            r = records[0]
+            dt = to_local_datetime(r["created_at"])
+            date_str = dt.strftime("%m-%d %H:%M")
+            return f"📝 上次记录：{date_str} {r['description']} {float(r['amount']):.2f}元 [{r['category']}]"
+        except Exception as e:
+            print(f"上次记录失败: {str(e)[:100]}")
+            return "❌ 查询失败，请稍后重试"
+
+    elif parsed["type"] == "undo_last":
+        try:
+            records = get_records_by_user(openid, limit=1)
+            if not records:
+                return "📝 暂无可撤销记录"
+            record = records[0]
+            archive_deleted_record(record, deleted_by=openid)
+            result = delete_record(record["id"])
+            if not getattr(result, "data", []):
+                return "❌ 撤销失败，可能没有权限（请检查 RLS 策略）"
+            return f"✅ 已撤销：{record['description']} {float(record['amount']):.2f}元"
+        except Exception as e:
+            print(f"撤销失败: {str(e)[:100]}")
+            return "❌ 撤销失败，请稍后重试"
 
     elif parsed["type"] == "record_backfill":
         try:
@@ -995,6 +1192,7 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 PENDING_DELETES.pop(openid, None)
 
             def parse_indices(raw: str) -> list:
+                raw = normalize_dash(raw)
                 raw = raw.replace("，", ",").replace(" ", "")
                 parts = [p for p in raw.split(",") if p]
                 indices = []
@@ -1208,6 +1406,34 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             print(f"外债查询失败: {str(e)[:100]}")
             return "❌ 外债查询失败，请稍后重试"
 
+    elif parsed["type"] == "report":
+        try:
+            action = parsed["action"]
+            if action == "订阅周报":
+                subscribe_report(openid, "weekly")
+                return "✅ 已订阅周报"
+            if action == "订阅月报":
+                subscribe_report(openid, "monthly")
+                return "✅ 已订阅月报"
+            if action == "取消周报":
+                unsubscribe_report(openid, "weekly")
+                return "✅ 已取消周报"
+            if action == "取消月报":
+                unsubscribe_report(openid, "monthly")
+                return "✅ 已取消月报"
+            if action == "周报":
+                start_date, end_date = get_date_range("7days")
+                stats = get_statistics(start_date=start_date, end_date=end_date)
+                return format_statistics(stats, "近七天", start_date, end_date)
+            if action == "月报":
+                start_date, end_date = get_date_range("30days")
+                stats = get_statistics(start_date=start_date, end_date=end_date)
+                return format_statistics(stats, "近一个月", start_date, end_date)
+            return "❌ 未知指令"
+        except Exception as e:
+            print(f"周报月报失败: {str(e)[:100]}")
+            return "❌ 处理失败，请稍后重试"
+
     elif parsed["type"] == "detail":
         try:
             period = parsed.get("period", "today")
@@ -1372,4 +1598,42 @@ async def export_excel(request: Request):
                                  headers=headers)
     except Exception as e:
         print(f"导出错误: {str(e)[:100]}")
+        return Response(content="error", status_code=500)
+
+
+@app.get("/api/report/weekly")
+async def report_weekly(request: Request):
+    """周报推送（需 REPORT_TOKEN）"""
+    token = dict(request.query_params).get("token", "")
+    if not REPORT_TOKEN or token != REPORT_TOKEN:
+        return Response(content="invalid", status_code=403)
+    try:
+        text = build_report_text("7days", "近七天")
+        subscribers = list_subscribers("weekly")
+        success = 0
+        for openid in subscribers:
+            if send_text_message(openid, text):
+                success += 1
+        return Response(content=f"ok {success}/{len(subscribers)}", media_type="text/plain")
+    except Exception as e:
+        print(f"周报推送错误: {str(e)[:100]}")
+        return Response(content="error", status_code=500)
+
+
+@app.get("/api/report/monthly")
+async def report_monthly(request: Request):
+    """月报推送（需 REPORT_TOKEN）"""
+    token = dict(request.query_params).get("token", "")
+    if not REPORT_TOKEN or token != REPORT_TOKEN:
+        return Response(content="invalid", status_code=403)
+    try:
+        text = build_report_text("30days", "近一个月")
+        subscribers = list_subscribers("monthly")
+        success = 0
+        for openid in subscribers:
+            if send_text_message(openid, text):
+                success += 1
+        return Response(content=f"ok {success}/{len(subscribers)}", media_type="text/plain")
+    except Exception as e:
+        print(f"月报推送错误: {str(e)[:100]}")
         return Response(content="error", status_code=500)
