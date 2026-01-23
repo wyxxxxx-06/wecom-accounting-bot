@@ -1052,6 +1052,12 @@ async def verify(request: Request):
         return Response(content="error", status_code=500)
 
 
+@app.get("/api/health")
+async def health():
+    """健康检查（保活用）"""
+    return Response(content="ok", media_type="text/plain")
+
+
 @app.post("/api/wechat")
 async def webhook(request: Request):
     """接收微信公众号消息"""
