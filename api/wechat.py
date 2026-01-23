@@ -829,9 +829,10 @@ def parse_message(content: str) -> dict:
         return {"type": "query_category", "category": content.split(maxsplit=1)[1].strip()}
     if content.startswith("统计 "):
         target = content.split(maxsplit=1)[1].strip()
-        if target in ["今日", "昨天", "昨日", "七天", "近七天", "半个月", "十五天", "近半个月", "一个月", "近一个月", "本周", "本月"]:
+        if target in ["今日", "今天", "昨天", "昨日", "七天", "近七天", "半个月", "十五天", "近半个月", "一个月", "近一个月", "本周", "本月"]:
             mapping = {
                 "今日": "today",
+                "今天": "today",
                 "昨天": "yesterday",
                 "昨日": "yesterday",
                 "七天": "7days",
