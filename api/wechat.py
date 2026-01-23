@@ -29,6 +29,10 @@ RETENTION_DAYS = 38
 ARCHIVE_BATCH = 200
 EXPORT_TTL_SECONDS = 600
 LOCAL_TZ = ZoneInfo("Asia/Shanghai")
+PENDING_DELETE_TTL = 300  # 秒
+
+# 待确认删除（内存，按 openid）
+PENDING_DELETES = {}
 
 # ============ 分类关键词映射 ============
 CATEGORY_KEYWORDS = {
@@ -623,6 +627,10 @@ def parse_message(content: str) -> dict:
         return {"type": "detail", "period": content.split(maxsplit=1)[1].strip()}
     if content in ["帮助", "help", "?"]:
         return {"type": "help"}
+    if content in ["确认删", "确认删除"]:
+        return {"type": "record_delete_confirm"}
+    if content in ["取消删", "取消删除"]:
+        return {"type": "record_delete_cancel"}
     if content == "统计":
         return {"type": "query", "period": "7days"}
 
@@ -898,6 +906,7 @@ def get_help_text() -> str:
 【修改/删除记录】
 发送：改 1 夜宵 鸡锁骨 16
 发送：删 2 / 删 1-4 / 删 昨天 1-3
+确认删除：确认删 / 取消删
 发送：回收站 / 恢复 1
 【补记】
 发送：补记 昨天 买烟 50
@@ -980,6 +989,11 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
 
     elif parsed["type"] == "record_delete":
         try:
+            # 清理过期
+            pending = PENDING_DELETES.get(openid)
+            if pending and (time.time() - pending["ts"] > PENDING_DELETE_TTL):
+                PENDING_DELETES.pop(openid, None)
+
             def parse_indices(raw: str) -> list:
                 raw = raw.replace("，", ",").replace(" ", "")
                 parts = [p for p in raw.split(",") if p]
@@ -1025,20 +1039,51 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             if invalid:
                 return "❌ 编号无效，请先发送「明细」查看编号"
 
+            selected = [records[i - 1] for i in indices]
+            PENDING_DELETES[openid] = {
+                "ts": time.time(),
+                "items": selected
+            }
+
+            lines = [f"将删除以下 {len(selected)} 条记录："]
+            for i, r in zip(indices, selected):
+                dt = to_local_datetime(r["created_at"])
+                date_str = dt.strftime("%m-%d %H:%M")
+                lines.append(f"{i}) {date_str} {r['description']} {float(r['amount']):.2f}元 [{r['category']}]")
+            lines.append("确认删除：发送「确认删」")
+            lines.append("取消删除：发送「取消删」")
+            return "\n".join(lines)
+        except Exception as e:
+            print(f"删除记录失败: {str(e)[:100]}")
+            return "❌ 删除失败，请稍后重试"
+
+    elif parsed["type"] == "record_delete_confirm":
+        try:
+            pending = PENDING_DELETES.get(openid)
+            if not pending:
+                return "❌ 没有待确认的删除"
+            if time.time() - pending["ts"] > PENDING_DELETE_TTL:
+                PENDING_DELETES.pop(openid, None)
+                return "❌ 删除已过期，请重新发起"
+
             deleted = 0
-            for i in indices:
-                record = records[i - 1]
+            for record in pending["items"]:
                 archive_deleted_record(record, deleted_by=openid)
                 result = delete_record(record["id"])
                 if getattr(result, "data", []):
                     deleted += 1
 
+            PENDING_DELETES.pop(openid, None)
             if deleted == 0:
                 return "❌ 删除失败，可能没有权限（请检查 RLS 策略）"
             return f"✅ 已删除 {deleted} 条记录"
         except Exception as e:
-            print(f"删除记录失败: {str(e)[:100]}")
+            print(f"确认删除失败: {str(e)[:100]}")
             return "❌ 删除失败，请稍后重试"
+
+    elif parsed["type"] == "record_delete_cancel":
+        PENDING_DELETES.pop(openid, None)
+        return "✅ 已取消删除"
 
     elif parsed["type"] == "deleted_list":
         try:
