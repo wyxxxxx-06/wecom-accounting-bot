@@ -228,6 +228,16 @@ def get_records(start_date: datetime = None, end_date: datetime = None, category
         return []
 
 
+def filter_records_by_local_range(records: list, start_date: datetime, end_date: datetime) -> list:
+    """按北京时间过滤记录（左闭右开）"""
+    filtered = []
+    for r in records:
+        dt = to_local_datetime(r["created_at"])
+        if start_date <= dt < end_date:
+            filtered.append(r)
+    return filtered
+
+
 def get_records_by_keyword(start_date: datetime = None, end_date: datetime = None, keyword: str = "", limit: int = None):
     """按描述关键词查询记录"""
     try:
@@ -271,7 +281,11 @@ def get_records_by_user(openid: str, limit: int = 1):
 
 def get_statistics(start_date: datetime = None, end_date: datetime = None):
     """获取统计数据（所有人共同）"""
-    records = get_records(start_date, end_date)
+    fetch_start = start_date - timedelta(days=1) if start_date else None
+    fetch_end = end_date + timedelta(days=1) if end_date else None
+    records = get_records(fetch_start, fetch_end)
+    if start_date and end_date:
+        records = filter_records_by_local_range(records, start_date, end_date)
     
     total = sum(r["amount"] for r in records)
     by_category = {}
@@ -1271,7 +1285,8 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                     start_date = dt
                     end_date = dt + timedelta(days=1)
 
-            records = get_records(start_date=start_date, end_date=end_date, limit=50)
+            records = get_records(start_date=start_date - timedelta(days=1), end_date=end_date + timedelta(days=1), limit=50)
+            records = filter_records_by_local_range(records, start_date, end_date)
             max_index = len(records)
             invalid = [i for i in indices if i < 1 or i > max_index]
             if invalid:
@@ -1373,6 +1388,7 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             now = datetime.now(LOCAL_TZ)
             month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             records = get_records(start_date=month_start, category=parsed["category"])
+            records = filter_records_by_local_range(records, month_start, datetime.now(LOCAL_TZ) + timedelta(days=1))
             total = sum(r["amount"] for r in records)
             count = len(records)
             avg = total / count if count else 0
@@ -1386,6 +1402,7 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 return result
 
             keyword_records = get_records_by_keyword(start_date=month_start, keyword=parsed["category"])
+            keyword_records = filter_records_by_local_range(keyword_records, month_start, datetime.now(LOCAL_TZ) + timedelta(days=1))
             keyword_total = sum(r["amount"] for r in keyword_records)
             keyword_count = len(keyword_records)
             keyword_avg = keyword_total / keyword_count if keyword_count else 0
@@ -1498,7 +1515,8 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 start_date = dt
                 end_date = dt + timedelta(days=1)
 
-            records = get_records(start_date=start_date, end_date=end_date)
+            records = get_records(start_date=start_date - timedelta(days=1), end_date=end_date + timedelta(days=1))
+            records = filter_records_by_local_range(records, start_date, end_date)
             return format_records(records, limit=20)
         except Exception as e:
             print(f"明细查询失败: {str(e)[:100]}")
@@ -1635,7 +1653,8 @@ async def export_excel(request: Request):
             return Response(content="invalid", status_code=403)
 
         start_date, end_date = get_date_range(period)
-        records = get_records(start_date=start_date, end_date=end_date)
+        records = get_records(start_date=start_date - timedelta(days=1), end_date=end_date + timedelta(days=1))
+        records = filter_records_by_local_range(records, start_date, end_date)
         data = build_export_excel_bytes(records, start_date, end_date)
         filename = f"records-{period}.xlsx"
         headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
