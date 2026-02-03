@@ -163,6 +163,14 @@ CREATE INDEX idx_category_aliases_category ON category_aliases(category);
 生活用品
 ```
 
+### 批量修改历史记录
+1. 发送：`导出 本月` 或 `导出 1月` 获取 Excel 文件
+2. 在 Excel 的"明细"表中修改分类、描述、金额（不要删除 ID 列）
+3. 打开 `https://你的域名/api/import` 上传修改后的文件
+4. 系统会按 ID 批量更新记录
+
+> 注意：只能修改现有记录，不能新增或删除记录
+
 ### 纠错学习
 ```
 纠错 午饭 餐饮

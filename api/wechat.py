@@ -12,9 +12,9 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from urllib.parse import unquote
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, UploadFile, File
 from fastapi.responses import StreamingResponse
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import httpx
 
@@ -1220,7 +1220,7 @@ def build_export_excel_bytes(records: list, start_date: datetime, end_date: date
 
     # 明细表
     ws_detail = wb.create_sheet("明细")
-    ws_detail.append(["日期", "时间", "描述", "金额", "分类"])
+    ws_detail.append(["ID", "日期", "时间", "描述", "金额", "分类"])
     for cell in ws_detail[ws_detail.max_row]:
         cell.font = header_font
         cell.fill = header_fill
@@ -1230,6 +1230,7 @@ def build_export_excel_bytes(records: list, start_date: datetime, end_date: date
     for r in records[:limit]:
         dt = to_local_datetime(r["created_at"])
         ws_detail.append([
+            r["id"],
             dt.strftime("%Y-%m-%d"),
             dt.strftime("%H:%M"),
             r["description"],
@@ -1238,24 +1239,80 @@ def build_export_excel_bytes(records: list, start_date: datetime, end_date: date
         ])
 
     ws_detail.freeze_panes = "A2"
-    ws_detail.column_dimensions["A"].width = 14
-    ws_detail.column_dimensions["B"].width = 10
-    ws_detail.column_dimensions["C"].width = 30
-    ws_detail.column_dimensions["D"].width = 12
+    ws_detail.column_dimensions["A"].width = 10
+    ws_detail.column_dimensions["B"].width = 14
+    ws_detail.column_dimensions["C"].width = 10
+    ws_detail.column_dimensions["D"].width = 30
     ws_detail.column_dimensions["E"].width = 12
+    ws_detail.column_dimensions["F"].width = 12
 
-    for row in ws_detail.iter_rows(min_row=1, max_row=ws_detail.max_row, min_col=1, max_col=5):
+    for row in ws_detail.iter_rows(min_row=1, max_row=ws_detail.max_row, min_col=1, max_col=6):
         for cell in row:
             if cell.value is None:
                 continue
             cell.border = cell.border or border
-            if cell.column == 4 and isinstance(cell.value, (int, float)):
+            if cell.column == 5 and isinstance(cell.value, (int, float)):
                 cell.number_format = "0.00"
 
     bio = io.BytesIO()
     wb.save(bio)
     bio.seek(0)
     return bio.read()
+
+
+def parse_import_excel(file_bytes: bytes) -> dict:
+    """解析导入的 Excel（从明细表读取）"""
+    try:
+        wb = load_workbook(io.BytesIO(file_bytes))
+        if "明细" not in wb.sheetnames:
+            return {"error": "no_detail_sheet"}
+        
+        ws = wb["明细"]
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+        updates = []
+        for row in rows:
+            if not row or len(row) < 6:
+                continue
+            record_id, date_str, time_str, description, amount, category = row[:6]
+            if not record_id or not isinstance(record_id, int):
+                continue
+            if not description or not amount or not category:
+                continue
+            try:
+                amount = float(amount)
+            except (ValueError, TypeError):
+                continue
+            updates.append({
+                "id": int(record_id),
+                "description": str(description).strip(),
+                "amount": amount,
+                "category": str(category).strip()
+            })
+        return {"updates": updates}
+    except Exception as e:
+        print(f"解析导入 Excel 错误: {str(e)[:100]}")
+        return {"error": "parse_failed"}
+
+
+def batch_update_records(updates: list) -> dict:
+    """批量更新记录"""
+    supabase = get_supabase_client()
+    success = 0
+    failed = []
+    for upd in updates:
+        try:
+            result = supabase.table("records").update({
+                "description": upd["description"],
+                "amount": upd["amount"],
+                "category": upd["category"]
+            }).eq("id", upd["id"]).execute()
+            if result.data:
+                success += 1
+            else:
+                failed.append(upd["id"])
+        except Exception:
+            failed.append(upd["id"])
+    return {"success": success, "failed": failed}
 
 
 def add_months(dt: datetime, months: int) -> datetime:
@@ -2098,6 +2155,29 @@ async def export_excel(request: Request):
                                  headers=headers)
     except Exception as e:
         print(f"导出错误: {str(e)[:100]}")
+        return Response(content="error", status_code=500)
+
+
+@app.post("/api/import")
+async def import_excel(file: UploadFile = File(...)):
+    """批量导入修改后的 Excel（从明细表读取）"""
+    try:
+        file_bytes = await file.read()
+        parsed = parse_import_excel(file_bytes)
+        if parsed.get("error"):
+            return Response(content=parsed["error"], status_code=400)
+        
+        updates = parsed.get("updates", [])
+        if not updates:
+            return Response(content="no_valid_records", status_code=400)
+        
+        result = batch_update_records(updates)
+        return Response(
+            content=f"ok: {result['success']} success, {len(result['failed'])} failed",
+            media_type="text/plain"
+        )
+    except Exception as e:
+        print(f"导入错误: {str(e)[:100]}")
         return Response(content="error", status_code=500)
 
 
