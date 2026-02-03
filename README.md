@@ -142,11 +142,10 @@ CREATE INDEX idx_category_aliases_category ON category_aliases(category);
 
 ### 查询统计
 ```
-今日
-本周
-本月
-统计 1月
-统计 2025年1月
+今日 / 本周 / 本月
+统计 1月          # 默认查去年1月（历史数据）
+统计 2月          # 查当前月（本年2月）
+统计 2025年1月    # 明确指定年份
 统计面板
 ```
 
