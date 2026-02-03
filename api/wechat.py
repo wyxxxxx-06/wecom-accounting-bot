@@ -1364,6 +1364,113 @@ def get_all_categories() -> list:
         return []
 
 
+def get_category_stats() -> list:
+    """获取分类统计（含记录数）"""
+    try:
+        supabase = get_supabase_client()
+        result = supabase.table("records").select("category").execute()
+        category_count = {}
+        for r in result.data:
+            cat = r.get("category", "").strip()
+            if cat:
+                category_count[cat] = category_count.get(cat, 0) + 1
+        return [{"category": cat, "count": count} for cat, count in sorted(category_count.items())]
+    except Exception as e:
+        print(f"分类统计错误: {str(e)[:100]}")
+        return []
+
+
+def build_category_excel_bytes() -> bytes:
+    """导出分类管理 Excel"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "分类管理"
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="4F81BD")
+    center_align = Alignment(horizontal="center", vertical="center")
+    border = Border(
+        left=Side(style="thin", color="D9D9D9"),
+        right=Side(style="thin", color="D9D9D9"),
+        top=Side(style="thin", color="D9D9D9"),
+        bottom=Side(style="thin", color="D9D9D9")
+    )
+
+    ws.append(["使用说明"])
+    ws.append(["1. 修改「新分类名」列，保持「当前分类名」不变"])
+    ws.append(["2. 保存后上传到 /api/import_categories 批量重命名"])
+    ws.append(["3. 系统会自动更新所有历史记录"])
+    ws.append([])
+
+    ws.append(["当前分类名", "记录数", "新分类名"])
+    for cell in ws[ws.max_row]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+        cell.border = border
+
+    stats = get_category_stats()
+    for item in stats:
+        ws.append([item["category"], item["count"], item["category"]])
+
+    ws.freeze_panes = "A7"
+    ws.column_dimensions["A"].width = 20
+    ws.column_dimensions["B"].width = 12
+    ws.column_dimensions["C"].width = 20
+
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=3):
+        for cell in row:
+            if cell.value is None:
+                continue
+            cell.border = cell.border or border
+            if cell.row <= 4:
+                cell.font = Font(color="FF0000")
+
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return bio.read()
+
+
+def parse_category_excel(file_bytes: bytes) -> dict:
+    """解析分类管理 Excel"""
+    try:
+        wb = load_workbook(io.BytesIO(file_bytes))
+        if "分类管理" not in wb.sheetnames:
+            return {"error": "no_category_sheet"}
+        
+        ws = wb["分类管理"]
+        rows = list(ws.iter_rows(min_row=7, values_only=True))
+        renames = []
+        for row in rows:
+            if not row or len(row) < 3:
+                continue
+            old_name, count, new_name = row[:3]
+            if not old_name or not new_name:
+                continue
+            old_name = str(old_name).strip()
+            new_name = str(new_name).strip()
+            if old_name != new_name:
+                renames.append({"old_name": old_name, "new_name": new_name})
+        return {"renames": renames}
+    except Exception as e:
+        print(f"解析分类 Excel 错误: {str(e)[:100]}")
+        return {"error": "parse_failed"}
+
+
+def batch_rename_categories(renames: list) -> dict:
+    """批量重命名分类"""
+    success = 0
+    failed = []
+    for item in renames:
+        result = rename_category(item["old_name"], item["new_name"])
+        if result.get("success"):
+            success += 1
+        else:
+            failed.append(item["old_name"])
+    return {"success": success, "failed": failed}
+
+
 def add_months(dt: datetime, months: int) -> datetime:
     """按月偏移"""
     year = dt.year + (dt.month - 1 + months) // 12
@@ -2230,7 +2337,12 @@ async def export_excel(request: Request):
         records = filter_records_by_local_range(records, start_date, end_date)
         data = build_export_excel_bytes(records, start_date, end_date)
         filename = f"records-{period}.xlsx"
-        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+        from urllib.parse import quote
+        encoded_filename = quote(filename)
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded_filename}',
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        }
         return StreamingResponse(io.BytesIO(data),
                                  media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                  headers=headers)
@@ -2244,6 +2356,18 @@ async def import_page():
     """上传页面"""
     import os
     upload_html_path = os.path.join(os.path.dirname(__file__), "upload.html")
+    try:
+        with open(upload_html_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return "<h1>上传页面未找到</h1>"
+
+
+@app.get("/api/import_categories_page", response_class=HTMLResponse)
+async def import_categories_page():
+    """批量修改分类页面"""
+    import os
+    upload_html_path = os.path.join(os.path.dirname(__file__), "upload_categories.html")
     try:
         with open(upload_html_path, "r", encoding="utf-8") as f:
             return f.read()
@@ -2271,6 +2395,49 @@ async def import_excel(file: UploadFile = File(...)):
         )
     except Exception as e:
         print(f"导入错误: {str(e)[:100]}")
+        return Response(content="error", status_code=500)
+
+
+@app.get("/api/export_categories")
+async def export_categories():
+    """导出分类管理 Excel"""
+    try:
+        data = build_category_excel_bytes()
+        filename = "categories.xlsx"
+        from urllib.parse import quote
+        encoded_filename = quote(filename)
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded_filename}',
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        }
+        return StreamingResponse(io.BytesIO(data),
+                                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                 headers=headers)
+    except Exception as e:
+        print(f"导出分类错误: {str(e)[:100]}")
+        return Response(content="error", status_code=500)
+
+
+@app.post("/api/import_categories")
+async def import_categories(file: UploadFile = File(...)):
+    """批量导入修改后的分类 Excel"""
+    try:
+        file_bytes = await file.read()
+        parsed = parse_category_excel(file_bytes)
+        if parsed.get("error"):
+            return Response(content=parsed["error"], status_code=400)
+        
+        renames = parsed.get("renames", [])
+        if not renames:
+            return Response(content="no_changes", status_code=400)
+        
+        result = batch_rename_categories(renames)
+        return Response(
+            content=f"ok: {result['success']} categories renamed, {len(result['failed'])} failed",
+            media_type="text/plain"
+        )
+    except Exception as e:
+        print(f"导入分类错误: {str(e)[:100]}")
         return Response(content="error", status_code=500)
 
 

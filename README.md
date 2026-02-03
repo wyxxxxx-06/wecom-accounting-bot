@@ -177,11 +177,19 @@ CREATE INDEX idx_category_aliases_category ON category_aliases(category);
 ```
 
 ### 自由管理分类名称
+
+**方法1：微信指令（单个修改）**
 ```
 分类列表              # 查看所有分类
 重命名分类 餐饮 吃饭   # 批量修改所有历史记录
 重命名分类 交通 出行   # 自由定制分类名称
 ```
+
+**方法2：Excel批量修改（推荐）**
+1. 浏览器打开：`https://你的域名/api/import_categories_page`
+2. 点击"下载分类管理表"
+3. 在 Excel 的"新分类名"列修改想要的名称
+4. 上传，系统会批量重命名所有历史记录
 
 ### 分类选择
 首次记账时如未学习分类会提示选择：
