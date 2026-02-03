@@ -176,6 +176,13 @@ CREATE INDEX idx_category_aliases_category ON category_aliases(category);
 纠错 午饭 餐饮
 ```
 
+### 自由管理分类名称
+```
+分类列表              # 查看所有分类
+重命名分类 餐饮 吃饭   # 批量修改所有历史记录
+重命名分类 交通 出行   # 自由定制分类名称
+```
+
 ### 分类选择
 首次记账时如未学习分类会提示选择：
 ```

@@ -28,7 +28,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 REPORT_TOKEN = os.environ.get("REPORT_TOKEN", "")
-RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "0"))
+RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "730"))  # 默认保存2年
 ARCHIVE_BATCH = 200
 EXPORT_TTL_SECONDS = 600
 LOCAL_TZ = ZoneInfo("Asia/Shanghai")
@@ -955,6 +955,15 @@ def parse_message(content: str) -> dict:
         keyword, category = learn_match.groups()
         return {"type": "category_learn", "keyword": keyword.strip(), "category": category.strip()}
 
+    # 分类管理
+    if content in ["分类列表", "所有分类", "查看分类"]:
+        return {"type": "category_list"}
+    
+    rename_match = re.match(r'^重命名分类\s+(\S+)\s+(\S+)$', content)
+    if rename_match:
+        old_name, new_name = rename_match.groups()
+        return {"type": "category_rename", "old_name": old_name.strip(), "new_name": new_name.strip()}
+
     # 外债相关（我欠别人）
     debt_add_match = re.match(r'^欠\s+(\S+)\s+(\d+(?:\.\d+)?)\s*(.*)$', content)
     if debt_add_match:
@@ -1315,6 +1324,46 @@ def batch_update_records(updates: list) -> dict:
     return {"success": success, "failed": failed}
 
 
+def rename_category(old_name: str, new_name: str) -> dict:
+    """批量重命名分类（包括历史记录）"""
+    try:
+        supabase = get_supabase_client()
+        # 更新所有记录
+        result = supabase.table("records").update({
+            "category": new_name
+        }).eq("category", old_name).execute()
+        
+        # 更新别名表
+        supabase.table("category_aliases").update({
+            "category": new_name
+        }).eq("category", old_name).execute()
+        
+        # 清除缓存
+        CATEGORY_ALIAS_CACHE["value"] = {}
+        CATEGORY_ALIAS_CACHE["expires_at"] = 0
+        
+        return {"success": True, "count": len(result.data) if result.data else 0}
+    except Exception as e:
+        print(f"重命名分类错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+def get_all_categories() -> list:
+    """获取所有已使用的分类"""
+    try:
+        supabase = get_supabase_client()
+        result = supabase.table("records").select("category").execute()
+        categories = set()
+        for r in result.data:
+            cat = r.get("category", "").strip()
+            if cat:
+                categories.add(cat)
+        return sorted(list(categories))
+    except Exception as e:
+        print(f"获取分类列表错误: {str(e)[:100]}")
+        return []
+
+
 def add_months(dt: datetime, months: int) -> datetime:
     """按月偏移"""
     year = dt.year + (dt.month - 1 + months) // 12
@@ -1495,6 +1544,11 @@ def get_help_text() -> str:
 【纠错学习】
 纠错 关键词 分类
 示例：纠错 午饭 餐饮
+
+【分类管理】
+分类列表 / 所有分类
+重命名分类 餐饮 吃饭
+（会批量修改所有历史记录）
 
 【分类选择】
 当描述未学习时会提示选择分类
@@ -2024,6 +2078,33 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
         except Exception as e:
             print(f"纠错失败: {str(e)[:100]}")
             return "❌ 纠错失败，请稍后重试"
+    
+    elif parsed["type"] == "category_list":
+        try:
+            categories = get_all_categories()
+            if not categories:
+                return "📂 暂无分类"
+            lines = ["📂 所有分类："]
+            for i, cat in enumerate(categories, start=1):
+                lines.append(f"{i}. {cat}")
+            lines.append("\n💡 使用「重命名分类 旧名 新名」来修改")
+            return "\n".join(lines)
+        except Exception as e:
+            print(f"分类列表失败: {str(e)[:100]}")
+            return "❌ 查询失败，请稍后重试"
+    
+    elif parsed["type"] == "category_rename":
+        try:
+            old_name = parsed["old_name"]
+            new_name = parsed["new_name"]
+            result = rename_category(old_name, new_name)
+            if not result.get("success"):
+                return f"❌ 重命名失败：{result.get('error', '未知错误')}"
+            count = result.get("count", 0)
+            return f"✅ 已将分类「{old_name}」重命名为「{new_name}」\n📝 更新了 {count} 条历史记录"
+        except Exception as e:
+            print(f"重命名分类失败: {str(e)[:100]}")
+            return "❌ 重命名失败，请稍后重试"
     
     else:
         return "🤔 没理解你的意思\n\n发送「帮助」查看使用说明"
