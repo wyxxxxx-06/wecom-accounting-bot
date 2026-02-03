@@ -2323,32 +2323,38 @@ async def export_excel(request: Request):
         sig = params.get("sig", "")
 
         if not verify_export_signature(openid, period, ts, sig):
-            return Response(content="invalid", status_code=403)
+            return Response(content="签名验证失败", status_code=403)
 
         if period.startswith("month:"):
             month_text = period.split("month:", 1)[1]
             month_range = parse_month_token(month_text)
             if not month_range:
-                return Response(content="invalid", status_code=400)
+                return Response(content="月份格式错误", status_code=400)
             start_date, end_date, _ = month_range
         else:
             start_date, end_date = get_date_range(period)
+        
+        if not start_date or not end_date:
+            return Response(content="日期范围错误", status_code=400)
+            
         records = get_records(start_date=start_date - timedelta(days=1), end_date=end_date + timedelta(days=1))
         records = filter_records_by_local_range(records, start_date, end_date)
         data = build_export_excel_bytes(records, start_date, end_date)
+        
         filename = f"records-{period}.xlsx"
-        from urllib.parse import quote
-        encoded_filename = quote(filename)
         headers = {
-            "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded_filename}',
-            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            "Content-Disposition": f'attachment; filename="{filename}"'
         }
-        return StreamingResponse(io.BytesIO(data),
-                                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                 headers=headers)
+        return StreamingResponse(
+            io.BytesIO(data),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers=headers
+        )
     except Exception as e:
-        print(f"导出错误: {str(e)[:100]}")
-        return Response(content="error", status_code=500)
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"导出错误详情: {error_detail}")
+        return Response(content=f"导出失败: {str(e)}", status_code=500)
 
 
 @app.get("/api/import", response_class=HTMLResponse)
