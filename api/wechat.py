@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from urllib.parse import unquote
 
 from fastapi import FastAPI, Request, Response, UploadFile, File
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import httpx
@@ -2156,6 +2156,18 @@ async def export_excel(request: Request):
     except Exception as e:
         print(f"导出错误: {str(e)[:100]}")
         return Response(content="error", status_code=500)
+
+
+@app.get("/api/import", response_class=HTMLResponse)
+async def import_page():
+    """上传页面"""
+    import os
+    upload_html_path = os.path.join(os.path.dirname(__file__), "upload.html")
+    try:
+        with open(upload_html_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return "<h1>上传页面未找到</h1>"
 
 
 @app.post("/api/import")
