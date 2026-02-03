@@ -1070,11 +1070,12 @@ def parse_month_token(token: str):
         # 明确指定了年份
         year = int(year_text)
     else:
-        # 没指定年份：优先取去年的该月（因为用户通常想查历史数据）
-        year = now.year - 1
-        # 只有当用户查询"当前月"时，才取今年
-        if month == now.month:
-            year = now.year
+        # 没指定年份：智能判断取今年还是去年
+        year = now.year
+        # 如果该月份大于当前月份（未来月份），取去年
+        if month > now.month:
+            year -= 1
+        # 如果该月份等于或小于当前月份，取今年（因为可能有历史数据）
     
     start_date = now.replace(year=year, month=month, day=1, hour=0, minute=0, second=0, microsecond=0)
     if month == 12:
