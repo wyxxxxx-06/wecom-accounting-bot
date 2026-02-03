@@ -15,6 +15,7 @@ from urllib.parse import unquote
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import httpx
 
 app = FastAPI()
@@ -27,12 +28,13 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 REPORT_TOKEN = os.environ.get("REPORT_TOKEN", "")
-RETENTION_DAYS = 38
+RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "0"))
 ARCHIVE_BATCH = 200
 EXPORT_TTL_SECONDS = 600
 LOCAL_TZ = ZoneInfo("Asia/Shanghai")
 UTC_TZ = ZoneInfo("UTC")
 PENDING_DELETE_TTL = 300  # 秒
+ALIAS_CACHE_TTL = 600
 
 # 待确认删除（内存，按 openid）
 PENDING_DELETES = {}
@@ -41,12 +43,16 @@ PENDING_DELETES = {}
 CATEGORY_KEYWORDS = {
     "餐饮": ["早餐", "午餐", "晚餐", "早饭", "午饭", "晚饭", "吃饭", "外卖", "饭", "餐", "奶茶", "咖啡", "饮料", "零食", "水果", "菜", "肉", "面", "粉", "火锅", "烧烤", "小吃"],
     "交通": ["打车", "滴滴", "出租车", "地铁", "公交", "公车", "油费", "加油", "停车", "高速", "过路费", "单车", "共享", "车费", "交通"],
-    "购物": ["淘宝", "京东", "拼多多", "购物", "买", "衣服", "鞋", "包", "日用品", "超市", "商场"],
+    "购物": ["淘宝", "京东", "拼多多", "购物", "买", "衣服", "鞋", "包", "超市", "商场"],
     "娱乐": ["电影", "游戏", "ktv", "唱歌", "旅游", "门票", "娱乐", "玩"],
     "居住": ["房租", "水费", "电费", "燃气", "物业", "网费", "宽带"],
     "医疗": ["医院", "药", "看病", "体检", "医疗"],
     "教育": ["书", "课程", "培训", "学习", "教育"],
+    "生活用品": ["洗发水", "洗发露", "沐浴露", "牙膏", "牙刷", "纸巾", "洗衣液", "清洁", "日用品", "生活用品"]
 }
+
+# 关键词别名缓存（全局）
+CATEGORY_ALIAS_CACHE = {"value": {}, "expires_at": 0}
 
 # ============ 数据库操作（使用 REST API）============
 def get_supabase_client():
@@ -289,23 +295,17 @@ def get_statistics(start_date: datetime = None, end_date: datetime = None):
     
     total = sum(r["amount"] for r in records)
     by_category = {}
-    by_user = {}
     max_record = None
     
     for r in records:
         cat = r["category"]
         by_category[cat] = by_category.get(cat, 0) + r["amount"]
-        nickname = r.get("nickname", "")
-        openid = r.get("openid", "")
-        if nickname and nickname != openid[:8]:
-            by_user[nickname] = by_user.get(nickname, 0) + r["amount"]
         if not max_record or r["amount"] > max_record["amount"]:
             max_record = r
     
     return {
         "total": total,
         "by_category": by_category,
-        "by_user": by_user,
         "count": len(records),
         "max_record": max_record,
         "latest_record": records[0] if records else None
@@ -472,6 +472,8 @@ def add_daily_total(record_date: str, amount: float):
 def archive_old_records():
     """归档超过保留天数的明细，只保留金额汇总"""
     try:
+        if RETENTION_DAYS <= 0:
+            return 0
         supabase = get_supabase_client()
         cutoff = datetime.now(LOCAL_TZ) - timedelta(days=RETENTION_DAYS)
         records = (
@@ -632,10 +634,92 @@ def list_subscribers(report_type: str):
         return []
 
 
+def is_duplicate_message(msg_id: str) -> bool:
+    """检查消息是否已处理"""
+    if not msg_id:
+        return False
+    try:
+        supabase = get_supabase_client()
+        result = supabase.table("message_dedup").select("msg_id").eq("msg_id", msg_id).limit(1).execute()
+        return bool(result.data)
+    except Exception:
+        return False
+
+
+def record_message_id(msg_id: str) -> None:
+    """记录消息 ID 用于去重"""
+    if not msg_id:
+        return
+    try:
+        supabase = get_supabase_client()
+        supabase.table("message_dedup").insert({
+            "msg_id": msg_id,
+            "created_at": datetime.now(LOCAL_TZ).isoformat()
+        }).execute()
+    except Exception:
+        return
+
+
 # ============ 消息解析 ============
+def get_category_aliases() -> dict:
+    """读取关键词别名（带缓存）"""
+    now = int(time.time())
+    if CATEGORY_ALIAS_CACHE["value"] and now < CATEGORY_ALIAS_CACHE["expires_at"]:
+        return CATEGORY_ALIAS_CACHE["value"]
+    try:
+        supabase = get_supabase_client()
+        result = supabase.table("category_aliases").select("keyword,category,enabled").execute()
+        aliases = {}
+        for row in result.data:
+            if row.get("enabled", True):
+                keyword = str(row.get("keyword", "")).strip().lower()
+                category = str(row.get("category", "")).strip()
+                if keyword and category:
+                    aliases[keyword] = category
+        CATEGORY_ALIAS_CACHE["value"] = aliases
+        CATEGORY_ALIAS_CACHE["expires_at"] = now + ALIAS_CACHE_TTL
+        return aliases
+    except Exception:
+        return {}
+
+
+def add_category_alias(keyword: str, category: str) -> bool:
+    """新增或更新关键词别名"""
+    keyword = keyword.strip().lower()
+    category = category.strip()
+    if not keyword or not category:
+        return False
+    try:
+        supabase = get_supabase_client()
+        existing = supabase.table("category_aliases").select("*").eq("keyword", keyword).execute()
+        now = datetime.now(LOCAL_TZ).isoformat()
+        if existing.data:
+            supabase.table("category_aliases").update({
+                "category": category,
+                "enabled": True,
+                "updated_at": now
+            }).eq("keyword", keyword).execute()
+        else:
+            supabase.table("category_aliases").insert({
+                "keyword": keyword,
+                "category": category,
+                "enabled": True,
+                "created_at": now,
+                "updated_at": now
+            }).execute()
+        CATEGORY_ALIAS_CACHE["expires_at"] = 0
+        return True
+    except Exception:
+        return False
+
+
 def parse_category(text: str) -> str:
     """从文本中识别分类"""
     text_lower = text.lower()
+    aliases = get_category_aliases()
+    for keyword, category in aliases.items():
+        if keyword in text_lower:
+            return category
     for category, keywords in CATEGORY_KEYWORDS.items():
         for keyword in keywords:
             if keyword in text_lower:
@@ -656,7 +740,8 @@ def parse_record_text(text: str) -> dict:
             "type": "record",
             "amount": float(amount),
             "description": desc.strip(),
-            "category": category.strip()
+            "category": category.strip(),
+            "explicit_category": True
         }
 
     # 描述 金额（按描述自动分组）
@@ -667,7 +752,8 @@ def parse_record_text(text: str) -> dict:
             "type": "record",
             "amount": float(amount),
             "description": desc.strip(),
-            "category": desc.strip()
+            "category": desc.strip(),
+            "explicit_category": False
         }
 
     # 描述*数量 金额（数量模式）
@@ -679,7 +765,8 @@ def parse_record_text(text: str) -> dict:
             "type": "record",
             "amount": total,
             "description": f"{desc}*{qty}",
-            "category": desc.strip()
+            "category": desc.strip(),
+            "explicit_category": False
         }
 
     # 记账：尝试解析金额
@@ -698,24 +785,29 @@ def parse_record_text(text: str) -> dict:
                 desc, amount, extra = groups
                 amount = float(amount)
                 category = extra.strip() if extra.strip() else desc.strip()
+                explicit_category = bool(extra.strip())
             elif i == 1:  # 金额 描述
                 amount, desc = groups
                 amount = float(amount)
                 category = desc.strip()
+                explicit_category = False
             elif i == 2:  # 描述金额
                 desc, amount = groups
                 amount = float(amount)
                 category = desc.strip()
+                explicit_category = False
             else:  # 金额描述
                 amount, desc = groups
                 amount = float(amount)
                 category = desc.strip()
+                explicit_category = False
 
             return {
                 "type": "record",
                 "amount": amount,
                 "description": desc.strip(),
-                "category": category
+                "category": category,
+                "explicit_category": explicit_category
             }
 
     return {"type": "unknown"}
@@ -747,6 +839,8 @@ def parse_message(content: str) -> dict:
         return {"type": "detail", "period": content.split(maxsplit=1)[1].strip()}
     if content in ["帮助", "help", "?"]:
         return {"type": "help"}
+    if content in ["面板", "统计面板"]:
+        return {"type": "dashboard"}
     if content in ["确认删", "确认删除"]:
         return {"type": "record_delete_confirm"}
     if content in ["取消删", "取消删除"]:
@@ -764,7 +858,7 @@ def parse_message(content: str) -> dict:
         target = export_excel_match.group(2)
         return {"type": "export", "target": target.strip() if target else ""}
 
-    export_match = re.match(r'^导出(?:\s+(.+))?$', content)
+    export_match = re.match(r'^导出\s*(.*)$', content)
     if export_match:
         target = export_match.group(1)
         return {"type": "export", "target": target.strip() if target else ""}
@@ -823,6 +917,11 @@ def parse_message(content: str) -> dict:
     if content in ["订阅周报", "订阅月报", "取消周报", "取消月报", "周报", "月报"]:
         return {"type": "report", "action": content}
 
+    learn_match = re.match(r'^纠错\s+(\S+)\s+(\S+)$', content)
+    if learn_match:
+        keyword, category = learn_match.groups()
+        return {"type": "category_learn", "keyword": keyword.strip(), "category": category.strip()}
+
     # 外债相关（我欠别人）
     debt_add_match = re.match(r'^欠\s+(\S+)\s+(\d+(?:\.\d+)?)\s*(.*)$', content)
     if debt_add_match:
@@ -860,7 +959,18 @@ def parse_message(content: str) -> dict:
                 "本月": "month"
             }
             return {"type": "query", "period": mapping[target]}
+        month_range = parse_month_token(target)
+        if month_range:
+            start_date, end_date, label = month_range
+            return {"type": "query_month", "start_date": start_date, "end_date": end_date, "label": label}
         return {"type": "query_category", "category": target}
+
+    if content.endswith("统计"):
+        month_token = content.replace("统计", "").strip()
+        month_range = parse_month_token(month_token)
+        if month_range:
+            start_date, end_date, label = month_range
+            return {"type": "query_month", "start_date": start_date, "end_date": end_date, "label": label}
     
     # 分类查询
     for category in CATEGORY_KEYWORDS.keys():
@@ -893,6 +1003,41 @@ def get_date_range(period: str):
         month_start = today_start.replace(day=1)
         return month_start, now
     return None, None
+
+
+def parse_month_token(token: str):
+    """解析月份（支持 1月/01月/2025年1月/2025-01/2025/01）"""
+    token = token.strip().replace(" ", "")
+    if not token:
+        return None
+    now = datetime.now(LOCAL_TZ)
+    match = re.match(r'^(?:(\d{4})[年/-])?(\d{1,2})(?:月)?$', token)
+    if not match:
+        return None
+    year_text, month_text = match.groups()
+    month = int(month_text)
+    if month < 1 or month > 12:
+        return None
+    if year_text:
+        year = int(year_text)
+    else:
+        year = now.year
+        if month > now.month:
+            year -= 1
+    start_date = now.replace(year=year, month=month, day=1, hour=0, minute=0, second=0, microsecond=0)
+    if month == 12:
+        end_date = start_date.replace(year=year + 1, month=1)
+    else:
+        end_date = start_date.replace(month=month + 1)
+    label = f"{year}年{month}月"
+    return start_date, end_date, label
+
+
+def resolve_record_category(parsed: dict) -> str:
+    """根据描述/显式分类确定最终分类"""
+    if parsed.get("explicit_category"):
+        return parsed["category"]
+    return parse_category(parsed.get("description", ""))
 
 
 def format_statistics(stats: dict, period_name: str, start_date: datetime, end_date: datetime) -> str:
@@ -976,8 +1121,18 @@ def build_export_excel_bytes(records: list, start_date: datetime, end_date: date
     ws = wb.active
     ws.title = "统计"
 
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="4F81BD")
+    center_align = Alignment(horizontal="center", vertical="center")
+    border = Border(
+        left=Side(style="thin", color="D9D9D9"),
+        right=Side(style="thin", color="D9D9D9"),
+        top=Side(style="thin", color="D9D9D9"),
+        bottom=Side(style="thin", color="D9D9D9")
+    )
+
     # 期间与类目统计
-    ws.append(["统计区间", f"{start_date.strftime('%m-%d')} ~ {end_date.strftime('%m-%d')}"])
+    ws.append(["统计区间", f"{start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"])
     ws.append([])
 
     category_totals = {}
@@ -992,27 +1147,132 @@ def build_export_excel_bytes(records: list, start_date: datetime, end_date: date
 
     ws.append(["每日合计"])
     ws.append(["日期", "金额"])
+    for cell in ws[ws.max_row]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+        cell.border = border
     for day, amount in sorted(daily_totals.items()):
-        ws.append([day, f"花费{round(amount, 2)}"])
+        ws.append([day, round(amount, 2)])
 
     ws.append([])
     ws.append(["类目统计"])
     ws.append(["类目", "金额"])
+    for cell in ws[ws.max_row]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+        cell.border = border
     for cat, amount in sorted(category_totals.items(), key=lambda x: -x[1]):
         ws.append([cat, round(amount, 2)])
 
     ws.append([])
     ws.append(["每天明细"])
     ws.append(["日期", "描述", "金额", "分类"])
+    detail_header_row = ws.max_row
+    for cell in ws[ws.max_row]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+        cell.border = border
     for r in records[:limit]:
         dt = to_local_datetime(r["created_at"])
-        date_str = f"{dt.month}.{dt.day}"
+        date_str = dt.strftime("%Y-%m-%d")
         ws.append([date_str, r["description"], float(r["amount"]), r["category"]])
+
+    ws.freeze_panes = f"A{detail_header_row + 1}"
+    ws.column_dimensions["A"].width = 14
+    ws.column_dimensions["B"].width = 30
+    ws.column_dimensions["C"].width = 12
+    ws.column_dimensions["D"].width = 12
+
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=4):
+        for cell in row:
+            if cell.value is None:
+                continue
+            cell.border = cell.border or border
 
     bio = io.BytesIO()
     wb.save(bio)
     bio.seek(0)
     return bio.read()
+
+
+def add_months(dt: datetime, months: int) -> datetime:
+    """按月偏移"""
+    year = dt.year + (dt.month - 1 + months) // 12
+    month = (dt.month - 1 + months) % 12 + 1
+    return dt.replace(year=year, month=month, day=1)
+
+
+def build_dashboard_text() -> str:
+    """统计面板：月/周/年趋势 + 分类占比"""
+    now = datetime.now(LOCAL_TZ)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    stats_month = get_statistics(start_date=month_start, end_date=now)
+
+    lines = ["📊 统计面板", ""]
+
+    # 分类占比（本月）
+    if stats_month["count"] > 0:
+        lines.append("🧭 本月分类占比")
+        total = stats_month["total"] or 0
+        sorted_cats = sorted(stats_month["by_category"].items(), key=lambda x: -x[1])
+        for cat, amount in sorted_cats:
+            percent = (amount / total * 100) if total else 0
+            lines.append(f"{cat} {amount:.2f}元 ({percent:.1f}%)")
+        lines.append("")
+    else:
+        lines.append("🧭 本月分类占比：暂无数据")
+        lines.append("")
+
+    # 趋势数据（近4周 / 近6月 / 近3年）
+    week_start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=now.weekday())
+    start_year = now.replace(year=now.year - 2, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    records = get_records(start_date=start_year - timedelta(days=1), end_date=now + timedelta(days=1))
+    records = filter_records_by_local_range(records, start_year, now + timedelta(days=1))
+
+    weekly_totals = {}
+    monthly_totals = {}
+    yearly_totals = {}
+
+    for r in records:
+        dt = to_local_datetime(r["created_at"])
+        amount = float(r["amount"])
+        week_key = (dt - timedelta(days=dt.weekday())).strftime("%Y-%m-%d")
+        month_key = dt.strftime("%Y-%m")
+        year_key = str(dt.year)
+        weekly_totals[week_key] = weekly_totals.get(week_key, 0) + amount
+        monthly_totals[month_key] = monthly_totals.get(month_key, 0) + amount
+        yearly_totals[year_key] = yearly_totals.get(year_key, 0) + amount
+
+    # 周趋势（近4周）
+    lines.append("📅 近4周趋势")
+    for i in range(3, -1, -1):
+        ws = week_start - timedelta(weeks=i)
+        we = ws + timedelta(days=6)
+        key = ws.strftime("%Y-%m-%d")
+        total = weekly_totals.get(key, 0)
+        lines.append(f"{ws.strftime('%m/%d')}-{we.strftime('%m/%d')} {total:.2f}元")
+    lines.append("")
+
+    # 月趋势（近6月）
+    lines.append("🗓️ 近6月趋势")
+    first_month = add_months(month_start, -5)
+    for i in range(6):
+        current = add_months(first_month, i)
+        key = current.strftime("%Y-%m")
+        total = monthly_totals.get(key, 0)
+        lines.append(f"{current.strftime('%Y-%m')} {total:.2f}元")
+    lines.append("")
+
+    # 年趋势（近3年）
+    lines.append("📈 近3年趋势")
+    for year in range(now.year - 2, now.year + 1):
+        total = yearly_totals.get(str(year), 0)
+        lines.append(f"{year}年 {total:.2f}元")
+
+    return "\n".join(lines)
 
 
 ACCESS_TOKEN_CACHE = {"value": "", "expires_at": 0}
@@ -1082,6 +1342,8 @@ def get_help_text() -> str:
 
 【查询统计】
 发送：今日 / 昨日 / 七天 / 半个月 / 一个月 / 本周 / 本月
+发送：统计 1月 / 1月统计 / 统计 2025年1月
+发送：统计面板 / 面板
 
 【查看明细】
 发送：明细 / 明细 昨天 / 明细 01-21
@@ -1097,7 +1359,7 @@ def get_help_text() -> str:
 
 【按分类查询】
 发送：分类 夜宵 / 统计 夜宵
-或发送分类名：餐饮 / 交通 / 购物 / 娱乐 / 居住 / 医疗 / 教育
+或发送分类名：餐饮 / 交通 / 购物 / 娱乐 / 居住 / 医疗 / 教育 / 生活用品
 
 【外债（我欠别人）】
 欠 张三 1000
@@ -1105,12 +1367,17 @@ def get_help_text() -> str:
 查询外债
 
 【导出Excel】
-发送：导出 今日 / 昨日 / 七天 / 半个月 / 一个月
+发送：导出 今日 / 昨日 / 七天 / 半个月 / 一个月 / 1月
+发送：导出表格 2025年1月
 发送：导出表格 今日 / 昨日 / 七天 / 半个月 / 一个月
 
 【快捷指令】
 发送：+ 买烟 20
 发送：上次 / 撤销
+
+【纠错学习】
+纠错 关键词 分类
+示例：纠错 午饭 餐饮
 
 【周报/月报】
 订阅周报 / 订阅月报
@@ -1135,11 +1402,12 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 parsed_line = parse_record_text(line)
                 if parsed_line["type"] == "record":
                     try:
+                        category = resolve_record_category(parsed_line)
                         add_record(
                             openid=openid,
                             nickname=nickname,
                             amount=parsed_line["amount"],
-                            category=parsed_line["category"],
+                            category=category,
                             description=parsed_line["description"]
                         )
                         success += 1
@@ -1160,14 +1428,15 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
     
     elif parsed["type"] == "record":
         try:
+            category = resolve_record_category(parsed)
             add_record(
                 openid=openid,
                 nickname=nickname,
                 amount=parsed["amount"],
-                category=parsed["category"],
+                category=category,
                 description=parsed["description"]
             )
-            return f"✅ 记账成功！\n{parsed['description']}：{parsed['amount']:.2f} 元\n分类：{parsed['category']}"
+            return f"✅ 记账成功！\n{parsed['description']}：{parsed['amount']:.2f} 元\n分类：{category}"
         except Exception as e:
             print(f"记账失败: {str(e)[:100]}")
             return "❌ 记账失败，请稍后重试"
@@ -1205,18 +1474,19 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             dt = parse_date_token(parsed["date_token"])
             if not dt:
                 return "❌ 日期格式错误，示例：补记 昨天 买烟 50 或 补记 01-21 买烟 50"
+            category = resolve_record_category(parsed)
             add_record(
                 openid=openid,
                 nickname=nickname,
                 amount=parsed["amount"],
-                category=parsed["category"],
+                category=category,
                 description=parsed["description"],
                 created_at=dt
             )
             return (
                 f"✅ 补记成功（{parsed['date_token']}）\n"
                 f"{parsed['description']}：{parsed['amount']:.2f} 元\n"
-                f"分类：{parsed['category']}"
+                f"分类：{category}"
             )
         except Exception as e:
             print(f"补记失败: {str(e)[:100]}")
@@ -1229,10 +1499,11 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             if index < 1 or index > len(records):
                 return "❌ 编号无效，请先发送「明细」查看编号"
             record = records[index - 1]
-            result = update_record(record["id"], parsed["amount"], parsed["category"], parsed["description"])
+            category = resolve_record_category(parsed)
+            result = update_record(record["id"], parsed["amount"], category, parsed["description"])
             if not getattr(result, "data", []):
                 return "❌ 修改失败，可能没有权限（请检查 RLS 策略）"
-            return f"✅ 已修改第 {index} 条\n{parsed['description']}：{parsed['amount']:.2f} 元\n分类：{parsed['category']}"
+            return f"✅ 已修改第 {index} 条\n{parsed['description']}：{parsed['amount']:.2f} 元\n分类：{category}"
         except Exception as e:
             print(f"修改记录失败: {str(e)[:100]}")
             return "❌ 修改失败，请稍后重试"
@@ -1382,19 +1653,32 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
         except Exception as e:
             print(f"查询失败: {str(e)[:100]}")
             return "❌ 查询失败，请稍后重试"
+
+    elif parsed["type"] == "query_month":
+        try:
+            start_date = parsed["start_date"]
+            end_date = parsed["end_date"]
+            stats = get_statistics(start_date=start_date, end_date=end_date)
+            return format_statistics(stats, parsed["label"], start_date, end_date)
+        except Exception as e:
+            print(f"月份查询失败: {str(e)[:100]}")
+            return "❌ 查询失败，请稍后重试"
     
     elif parsed["type"] == "query_category":
         try:
             now = datetime.now(LOCAL_TZ)
             month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            records = get_records(start_date=month_start, category=parsed["category"])
+            target_category = parsed["category"]
+            if target_category not in CATEGORY_KEYWORDS:
+                target_category = parse_category(target_category)
+            records = get_records(start_date=month_start, category=target_category)
             records = filter_records_by_local_range(records, month_start, datetime.now(LOCAL_TZ) + timedelta(days=1))
             total = sum(r["amount"] for r in records)
             count = len(records)
             avg = total / count if count else 0
             if count > 0:
                 result = (
-                    f"📂 本月【{parsed['category']}】支出：{total:.2f} 元\n"
+                    f"📂 本月【{target_category}】支出：{total:.2f} 元\n"
                     f"🧾 记录数：{count} 条\n"
                     f"📉 平均单笔：{avg:.2f} 元\n\n"
                 )
@@ -1509,11 +1793,15 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             elif period == "本月":
                 start_date, end_date = get_date_range("month")
             else:
-                dt = parse_date_token(period)
-                if not dt:
-                    return "❌ 明细日期格式错误，示例：明细 昨天 / 明细 01-21"
-                start_date = dt
-                end_date = dt + timedelta(days=1)
+                month_range = parse_month_token(period)
+                if month_range:
+                    start_date, end_date, _ = month_range
+                else:
+                    dt = parse_date_token(period)
+                    if not dt:
+                        return "❌ 明细日期格式错误，示例：明细 昨天 / 明细 01-21 / 明细 1月"
+                    start_date = dt
+                    end_date = dt + timedelta(days=1)
 
             records = get_records(start_date=start_date - timedelta(days=1), end_date=end_date + timedelta(days=1))
             records = filter_records_by_local_range(records, start_date, end_date)
@@ -1539,7 +1827,12 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 "本周": "week",
                 "本月": "month"
             }
-            period_key = mapping.get(target, "month")
+            month_range = parse_month_token(target)
+            if month_range:
+                start_date, end_date, label = month_range
+                period_key = f"month:{start_date.strftime('%Y-%m')}"
+            else:
+                period_key = mapping.get(target, "month")
             export_link = build_export_link(openid, period_key)
             if not export_link:
                 return "❌ 未配置导出地址，请先设置 PUBLIC_BASE_URL"
@@ -1547,6 +1840,23 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
         except Exception as e:
             print(f"导出失败: {str(e)[:100]}")
             return "❌ 导出失败，请稍后重试"
+
+    elif parsed["type"] == "dashboard":
+        try:
+            return build_dashboard_text()
+        except Exception as e:
+            print(f"面板失败: {str(e)[:100]}")
+            return "❌ 面板生成失败，请稍后重试"
+
+    elif parsed["type"] == "category_learn":
+        try:
+            ok = add_category_alias(parsed["keyword"], parsed["category"])
+            if not ok:
+                return "❌ 纠错失败，请检查格式"
+            return f"✅ 已学习：{parsed['keyword']} → {parsed['category']}"
+        except Exception as e:
+            print(f"纠错失败: {str(e)[:100]}")
+            return "❌ 纠错失败，请稍后重试"
     
     else:
         return "🤔 没理解你的意思\n\n发送「帮助」查看使用说明"
@@ -1607,18 +1917,26 @@ async def webhook(request: Request):
         
         msg_type = xml_tree.find("MsgType").text
         from_user = xml_tree.find("FromUserName").text
+        msg_id_node = xml_tree.find("MsgId")
+        msg_id = msg_id_node.text if msg_id_node is not None else ""
         
         # 只处理文本消息
         if msg_type != "text":
             return Response(content="success", media_type="text/plain")
         
         content = xml_tree.find("Content").text
+
+        if msg_id and is_duplicate_message(msg_id):
+            return Response(content="success", media_type="text/plain")
         
         # 获取用户信息（可选，需要 access_token）
         nickname = from_user[:8]  # 暂时用 openid 前8位作为标识
         
         # 处理消息
         reply_content = handle_message(from_user, nickname, content)
+
+        if msg_id:
+            record_message_id(msg_id)
         
         # 构造回复 XML
         to_user = xml_tree.find("FromUserName").text
@@ -1652,7 +1970,14 @@ async def export_excel(request: Request):
         if not verify_export_signature(openid, period, ts, sig):
             return Response(content="invalid", status_code=403)
 
-        start_date, end_date = get_date_range(period)
+        if period.startswith("month:"):
+            month_text = period.split("month:", 1)[1]
+            month_range = parse_month_token(month_text)
+            if not month_range:
+                return Response(content="invalid", status_code=400)
+            start_date, end_date, _ = month_range
+        else:
+            start_date, end_date = get_date_range(period)
         records = get_records(start_date=start_date - timedelta(days=1), end_date=end_date + timedelta(days=1))
         records = filter_records_by_local_range(records, start_date, end_date)
         data = build_export_excel_bytes(records, start_date, end_date)

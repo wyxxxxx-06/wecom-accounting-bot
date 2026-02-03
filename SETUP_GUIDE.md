@@ -44,6 +44,21 @@ CREATE TABLE records (
 CREATE INDEX idx_records_openid ON records(openid);
 CREATE INDEX idx_records_created_at ON records(created_at);
 CREATE INDEX idx_records_category ON records(category);
+
+CREATE TABLE message_dedup (
+    msg_id VARCHAR(64) PRIMARY KEY,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE category_aliases (
+    id SERIAL PRIMARY KEY,
+    keyword VARCHAR(100) UNIQUE NOT NULL,
+    category VARCHAR(50) NOT NULL,
+    enabled BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX idx_category_aliases_category ON category_aliases(category);
 ```
 
 7. 点击 "Run" 执行
@@ -73,6 +88,7 @@ CREATE INDEX idx_records_category ON records(category);
 | `WECHAT_TOKEN` | 自定义 Token（随机字符串，如：`MyToken123456`） |
 | `SUPABASE_URL` | 你的 Supabase Project URL |
 | `SUPABASE_KEY` | 你的 Supabase anon key |
+| `RETENTION_DAYS` | 明细保留天数（0 表示不归档） |
 
 6. 点击 "Create Web Service"
 7. 等待部署完成，记录下域名（如：`https://wechat-accounting-bot.onrender.com`）

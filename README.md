@@ -7,6 +7,7 @@
 - ✅ 快速记账：`午餐 35` 或 `打车 50 交通`
 - ✅ 自动识别分类：餐饮、交通、购物、娱乐等
 - ✅ 统计查询：今日/本周/本月
+- ✅ 统计面板：月/周/年趋势、分类占比
 - ✅ 多人共同记账，共同统计
 
 ## 重要说明
@@ -85,6 +86,21 @@ CREATE TABLE records (
 CREATE INDEX idx_records_openid ON records(openid);
 CREATE INDEX idx_records_created_at ON records(created_at);
 CREATE INDEX idx_records_category ON records(category);
+
+CREATE TABLE message_dedup (
+    msg_id VARCHAR(64) PRIMARY KEY,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE category_aliases (
+    id SERIAL PRIMARY KEY,
+    keyword VARCHAR(100) UNIQUE NOT NULL,
+    category VARCHAR(50) NOT NULL,
+    enabled BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX idx_category_aliases_category ON category_aliases(category);
 ```
 
 4. 记录 `Project URL` 和 `anon key`
@@ -128,17 +144,27 @@ CREATE INDEX idx_records_category ON records(category);
 今日
 本周
 本月
+统计 1月
+统计 2025年1月
+统计面板
 ```
 
 ### 查看明细
 ```
 明细
+明细 1月
 ```
 
 ### 按分类查询
 ```
 餐饮
 交通
+生活用品
+```
+
+### 纠错学习
+```
+纠错 午饭 餐饮
 ```
 
 ## 分类说明
@@ -152,4 +178,5 @@ CREATE INDEX idx_records_category ON records(category);
 | 居住 | 房租、水费、电费、物业... |
 | 医疗 | 医院、药、看病... |
 | 教育 | 书、课程、培训... |
+| 生活用品 | 洗发水、纸巾、洗衣液、清洁... |
 | 其他 | 无法识别时归入此类 |
