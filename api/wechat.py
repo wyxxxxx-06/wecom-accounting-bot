@@ -1223,7 +1223,8 @@ def build_export_excel_bytes(records: list, start_date: datetime, end_date: date
                 continue
             if cell.row in [1, 2, 3]:
                 cell.font = Font(bold=True)
-            cell.border = cell.border or border
+            if cell.row > 4:
+                cell.border = border
             if cell.column in [2] and isinstance(cell.value, (int, float)):
                 cell.number_format = "0.00"
 
@@ -1255,11 +1256,11 @@ def build_export_excel_bytes(records: list, start_date: datetime, end_date: date
     ws_detail.column_dimensions["E"].width = 12
     ws_detail.column_dimensions["F"].width = 12
 
-    for row in ws_detail.iter_rows(min_row=1, max_row=ws_detail.max_row, min_col=1, max_col=6):
+    for row in ws_detail.iter_rows(min_row=2, max_row=ws_detail.max_row, min_col=1, max_col=6):
         for cell in row:
             if cell.value is None:
                 continue
-            cell.border = cell.border or border
+            cell.border = border
             if cell.column == 5 and isinstance(cell.value, (int, float)):
                 cell.number_format = "0.00"
 
@@ -1422,7 +1423,7 @@ def build_category_excel_bytes() -> bytes:
         for cell in row:
             if cell.value is None:
                 continue
-            cell.border = cell.border or border
+            cell.border = border
             if cell.row <= 4:
                 cell.font = Font(color="FF0000")
 
