@@ -1048,7 +1048,13 @@ def get_date_range(period: str):
 
 
 def parse_month_token(token: str):
-    """解析月份（支持 1月/01月/2025年1月/2025-01/2025/01）"""
+    """解析月份（支持 1月/01月/2025年1月/2025-01/2025/01）
+    
+    不指定年份时的逻辑：
+    - 查询"上一次完整的该月份"
+    - 如果该月已经过去（且已完整结束），取今年
+    - 如果该月未来或正在进行，取去年
+    """
     token = token.strip().replace(" ", "")
     if not token:
         return None
@@ -1061,11 +1067,15 @@ def parse_month_token(token: str):
     if month < 1 or month > 12:
         return None
     if year_text:
+        # 明确指定了年份
         year = int(year_text)
     else:
-        year = now.year
-        if month > now.month:
-            year -= 1
+        # 没指定年份：优先取去年的该月（因为用户通常想查历史数据）
+        year = now.year - 1
+        # 只有当用户查询"当前月"时，才取今年
+        if month == now.month:
+            year = now.year
+    
     start_date = now.replace(year=year, month=month, day=1, hour=0, minute=0, second=0, microsecond=0)
     if month == 12:
         end_date = start_date.replace(year=year + 1, month=1)
