@@ -1044,6 +1044,10 @@ def get_date_range(period: str):
     elif period == "month":
         month_start = today_start.replace(day=1)
         return month_start, now
+    elif period == "all":
+        # 导出全部：从2020年1月1日到现在（覆盖所有可能的记录）
+        all_start = datetime(2020, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+        return all_start, now + timedelta(days=1)
     return None, None
 
 
@@ -1652,9 +1656,10 @@ def get_help_text() -> str:
 查询外债
 
 【导出Excel】
-发送：导出 今日 / 昨日 / 七天 / 半个月 / 一个月 / 1月
+发送：导出 全部 / 所有
+发送：导出 本月 / 1月 / 2025年1月
+发送：导出 今日 / 昨日 / 七天 / 半个月 / 一个月
 发送：导出表格 2025年1月
-发送：导出表格 今日 / 昨日 / 七天 / 半个月 / 一个月
 
 【快捷指令】
 发送：+ 买烟 20
@@ -2165,7 +2170,9 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 "一个月": "30days",
                 "近一个月": "30days",
                 "本周": "week",
-                "本月": "month"
+                "本月": "month",
+                "全部": "all",
+                "所有": "all"
             }
             month_range = parse_month_token(target)
             if month_range:
@@ -2351,7 +2358,9 @@ async def export_excel(request: Request):
             
         records = get_records(start_date=start_date - timedelta(days=1), end_date=end_date + timedelta(days=1))
         records = filter_records_by_local_range(records, start_date, end_date)
-        data = build_export_excel_bytes(records, start_date, end_date)
+        # 全部导出时增加限制到10000条
+        limit = 10000 if period == "all" else 1000
+        data = build_export_excel_bytes(records, start_date, end_date, limit=limit)
         
         filename = f"records-{period}.xlsx"
         headers = {
