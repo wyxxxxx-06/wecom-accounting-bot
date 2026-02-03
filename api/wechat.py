@@ -35,9 +35,12 @@ LOCAL_TZ = ZoneInfo("Asia/Shanghai")
 UTC_TZ = ZoneInfo("UTC")
 PENDING_DELETE_TTL = 300  # 秒
 ALIAS_CACHE_TTL = 600
+PENDING_CATEGORY_TTL = 300  # 秒
 
 # 待确认删除（内存，按 openid）
 PENDING_DELETES = {}
+# 待分类选择（内存，按 openid）
+PENDING_CATEGORY_PICKS = {}
 
 # ============ 分类关键词映射 ============
 CATEGORY_KEYWORDS = {
@@ -727,6 +730,36 @@ def parse_category(text: str) -> str:
     return "其他"
 
 
+def match_alias_category(text: str) -> str:
+    """匹配已学习的别名分类"""
+    text_lower = text.lower()
+    aliases = get_category_aliases()
+    for keyword, category in aliases.items():
+        if keyword in text_lower:
+            return category
+    return ""
+
+
+def get_category_candidates() -> list:
+    """可选分类列表"""
+    categories = list(CATEGORY_KEYWORDS.keys())
+    if "其他" not in categories:
+        categories.append("其他")
+    return categories
+
+
+def build_category_pick_prompt(description: str, amount: float, categories: list) -> str:
+    """构建分类选择提示"""
+    lines = [
+        f"请选择分类：",
+        f"{description} {amount:.2f} 元"
+    ]
+    for i, cat in enumerate(categories, start=1):
+        lines.append(f"{i}. {cat}")
+    lines.append("回复序号即可，或发送 取消")
+    return "\n".join(lines)
+
+
 def parse_record_text(text: str) -> dict:
     """解析记账文本，返回 dict 或 unknown"""
     text = text.strip()
@@ -1119,7 +1152,7 @@ def build_export_excel_bytes(records: list, start_date: datetime, end_date: date
     """导出 Excel（二进制）"""
     wb = Workbook()
     ws = wb.active
-    ws.title = "统计"
+    ws.title = "汇总"
 
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill("solid", fgColor="4F81BD")
@@ -1132,7 +1165,10 @@ def build_export_excel_bytes(records: list, start_date: datetime, end_date: date
     )
 
     # 期间与类目统计
+    total_amount = sum(float(r["amount"]) for r in records[:limit])
     ws.append(["统计区间", f"{start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"])
+    ws.append(["记录数", len(records[:limit])])
+    ws.append(["总支出", round(total_amount, 2)])
     ws.append([])
 
     category_totals = {}
@@ -1145,6 +1181,18 @@ def build_export_excel_bytes(records: list, start_date: datetime, end_date: date
         category_totals[category] = category_totals.get(category, 0) + amount
         daily_totals[day_key] = daily_totals.get(day_key, 0) + amount
 
+    ws.append(["类目统计"])
+    ws.append(["类目", "金额", "占比"])
+    for cell in ws[ws.max_row]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+        cell.border = border
+    for cat, amount in sorted(category_totals.items(), key=lambda x: -x[1]):
+        percent = (amount / total_amount * 100) if total_amount else 0
+        ws.append([cat, round(amount, 2), f"{percent:.1f}%"])
+
+    ws.append([])
     ws.append(["每日合计"])
     ws.append(["日期", "金额"])
     for cell in ws[ws.max_row]:
@@ -1155,42 +1203,54 @@ def build_export_excel_bytes(records: list, start_date: datetime, end_date: date
     for day, amount in sorted(daily_totals.items()):
         ws.append([day, round(amount, 2)])
 
-    ws.append([])
-    ws.append(["类目统计"])
-    ws.append(["类目", "金额"])
-    for cell in ws[ws.max_row]:
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = center_align
-        cell.border = border
-    for cat, amount in sorted(category_totals.items(), key=lambda x: -x[1]):
-        ws.append([cat, round(amount, 2)])
+    ws.freeze_panes = "A5"
+    ws.column_dimensions["A"].width = 16
+    ws.column_dimensions["B"].width = 16
+    ws.column_dimensions["C"].width = 12
 
-    ws.append([])
-    ws.append(["每天明细"])
-    ws.append(["日期", "描述", "金额", "分类"])
-    detail_header_row = ws.max_row
-    for cell in ws[ws.max_row]:
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=3):
+        for cell in row:
+            if cell.value is None:
+                continue
+            if cell.row in [1, 2, 3]:
+                cell.font = Font(bold=True)
+            cell.border = cell.border or border
+            if cell.column in [2] and isinstance(cell.value, (int, float)):
+                cell.number_format = "0.00"
+
+    # 明细表
+    ws_detail = wb.create_sheet("明细")
+    ws_detail.append(["日期", "时间", "描述", "金额", "分类"])
+    for cell in ws_detail[ws_detail.max_row]:
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = center_align
         cell.border = border
+
     for r in records[:limit]:
         dt = to_local_datetime(r["created_at"])
-        date_str = dt.strftime("%Y-%m-%d")
-        ws.append([date_str, r["description"], float(r["amount"]), r["category"]])
+        ws_detail.append([
+            dt.strftime("%Y-%m-%d"),
+            dt.strftime("%H:%M"),
+            r["description"],
+            float(r["amount"]),
+            r["category"]
+        ])
 
-    ws.freeze_panes = f"A{detail_header_row + 1}"
-    ws.column_dimensions["A"].width = 14
-    ws.column_dimensions["B"].width = 30
-    ws.column_dimensions["C"].width = 12
-    ws.column_dimensions["D"].width = 12
+    ws_detail.freeze_panes = "A2"
+    ws_detail.column_dimensions["A"].width = 14
+    ws_detail.column_dimensions["B"].width = 10
+    ws_detail.column_dimensions["C"].width = 30
+    ws_detail.column_dimensions["D"].width = 12
+    ws_detail.column_dimensions["E"].width = 12
 
-    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=4):
+    for row in ws_detail.iter_rows(min_row=1, max_row=ws_detail.max_row, min_col=1, max_col=5):
         for cell in row:
             if cell.value is None:
                 continue
             cell.border = cell.border or border
+            if cell.column == 4 and isinstance(cell.value, (int, float)):
+                cell.number_format = "0.00"
 
     bio = io.BytesIO()
     wb.save(bio)
@@ -1379,6 +1439,10 @@ def get_help_text() -> str:
 纠错 关键词 分类
 示例：纠错 午饭 餐饮
 
+【分类选择】
+当描述未学习时会提示选择分类
+回复序号即可，或发送 取消
+
 【周报/月报】
 订阅周报 / 订阅月报
 取消周报 / 取消月报
@@ -1390,6 +1454,38 @@ def get_help_text() -> str:
 # ============ 处理消息 ============
 def handle_message(openid: str, nickname: str, content: str) -> str:
     """处理用户消息，返回回复内容"""
+    content = content.strip()
+
+    # 分类选择处理
+    pending_pick = PENDING_CATEGORY_PICKS.get(openid)
+    if pending_pick:
+        if time.time() - pending_pick["ts"] > PENDING_CATEGORY_TTL:
+            PENDING_CATEGORY_PICKS.pop(openid, None)
+        elif content in ["取消", "取消分类"]:
+            PENDING_CATEGORY_PICKS.pop(openid, None)
+            return "✅ 已取消分类选择"
+        elif content.isdigit():
+            idx = int(content)
+            categories = pending_pick["categories"]
+            if 1 <= idx <= len(categories):
+                category = categories[idx - 1]
+                add_record(
+                    openid=openid,
+                    nickname=nickname,
+                    amount=pending_pick["amount"],
+                    category=category,
+                    description=pending_pick["description"]
+                )
+                add_category_alias(pending_pick["description"], category)
+                PENDING_CATEGORY_PICKS.pop(openid, None)
+                return (
+                    f"✅ 记账成功！\n{pending_pick['description']}：{pending_pick['amount']:.2f} 元\n"
+                    f"分类：{category}\n已记住，下次将自动归类"
+                )
+            return build_category_pick_prompt(pending_pick["description"], pending_pick["amount"], categories)
+        else:
+            return build_category_pick_prompt(pending_pick["description"], pending_pick["amount"], pending_pick["categories"])
+
     # 批量记账：一行一条
     if "批量" in content or "\n" in content or "；" in content or ";" in content:
         raw = content.replace("批量", "").strip()
@@ -1402,7 +1498,8 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 parsed_line = parse_record_text(line)
                 if parsed_line["type"] == "record":
                     try:
-                        category = resolve_record_category(parsed_line)
+                        alias_category = match_alias_category(parsed_line["description"])
+                        category = alias_category if alias_category else parse_category(parsed_line["description"])
                         add_record(
                             openid=openid,
                             nickname=nickname,
@@ -1428,7 +1525,20 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
     
     elif parsed["type"] == "record":
         try:
-            category = resolve_record_category(parsed)
+            if parsed.get("explicit_category"):
+                category = parsed["category"]
+            else:
+                alias_category = match_alias_category(parsed["description"])
+                if not alias_category:
+                    categories = get_category_candidates()
+                    PENDING_CATEGORY_PICKS[openid] = {
+                        "ts": time.time(),
+                        "description": parsed["description"],
+                        "amount": parsed["amount"],
+                        "categories": categories
+                    }
+                    return build_category_pick_prompt(parsed["description"], parsed["amount"], categories)
+                category = alias_category
             add_record(
                 openid=openid,
                 nickname=nickname,
