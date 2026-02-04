@@ -2394,16 +2394,16 @@ async def export_excel(request: Request):
         limit = 10000 if period == "all" else 1000
         data = build_export_excel_bytes(records, start_date, end_date, limit=limit)
         
-        # 生成文件名：导出时间_范围.xlsx
+        # 生成文件名：导出时间_范围.xlsx（使用英文避免编码问题）
         export_time = datetime.now(LOCAL_TZ).strftime("%Y%m%d_%H%M%S")
         if period.startswith("month:"):
             month_text = period.split("month:", 1)[1]
             range_text = month_text.replace("-", "")
         elif period == "all":
-            range_text = "全部"
+            range_text = "all"
         else:
             range_text = period
-        filename = f"记账记录_{export_time}_{range_text}.xlsx"
+        filename = f"records_{export_time}_{range_text}.xlsx"
         headers = {
             "Content-Disposition": f'attachment; filename="{filename}"'
         }
