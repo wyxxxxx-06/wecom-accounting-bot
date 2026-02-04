@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>记账管理后台</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -1412,10 +1413,11 @@
                     const currentValue = Array.from(select.selectedOptions).map(o => o.value);
                     select.innerHTML = '<option value="">全部分类</option>';
                     data.categories.forEach(cat => {
+                        const categoryName = typeof cat === 'string' ? cat : cat.category;
                         const option = document.createElement('option');
-                        option.value = cat;
-                        option.textContent = cat;
-                        if (currentValue.includes(cat)) {
+                        option.value = categoryName;
+                        option.textContent = categoryName;
+                        if (currentValue.includes(categoryName)) {
                             option.selected = true;
                         }
                         select.appendChild(option);
@@ -1707,6 +1709,26 @@
                                     padding: 14,
                                     titleFont: { size: 15, weight: '700' },
                                     bodyFont: { size: 14 }
+                                },
+                                datalabels: {
+                                    display: true,
+                                    color: '#fff',
+                                    font: {
+                                        size: 12,
+                                        weight: 'bold'
+                                    },
+                                    formatter: function(value, context) {
+                                        const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                        const percent = ((value / total) * 100).toFixed(1);
+                                        // 只显示大于5%的分类名称
+                                        if (percent >= 5) {
+                                            return context.chart.data.labels[context.dataIndex] + '\n' + percent + '%';
+                                        }
+                                        return '';
+                                    },
+                                    textAlign: 'center',
+                                    textStrokeColor: 'rgba(0,0,0,0.3)',
+                                    textStrokeWidth: 2
                                 }
                             },
                             animation: {
@@ -1714,7 +1736,8 @@
                                 animateScale: true,
                                 duration: 1000
                             }
-                        }
+                        },
+                        plugins: [ChartDataLabels]
                     });
 
                     // 更新标题
@@ -1784,6 +1807,22 @@
                                             return '支出: ¥' + context.parsed.y.toFixed(2);
                                         }
                                     }
+                                },
+                                datalabels: {
+                                    display: true,
+                                    align: 'top',
+                                    anchor: 'end',
+                                    color: '#667eea',
+                                    font: {
+                                        size: 11,
+                                        weight: 'bold'
+                                    },
+                                    formatter: function(value) {
+                                        return '¥' + value.toFixed(0);
+                                    },
+                                    backgroundColor: 'rgba(255,255,255,0.8)',
+                                    borderRadius: 4,
+                                    padding: 4
                                 }
                             },
                             scales: {
@@ -1813,7 +1852,8 @@
                                 duration: 1000,
                                 easing: 'easeInOutQuart'
                             }
-                        }
+                        },
+                        plugins: [ChartDataLabels]
                     });
                 }
             } catch (e) {
