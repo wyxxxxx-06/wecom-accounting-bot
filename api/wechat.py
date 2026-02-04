@@ -41,6 +41,12 @@ UTC_TZ = ZoneInfo("UTC")
 PENDING_DELETE_TTL = 300  # 秒
 ALIAS_CACHE_TTL = 600
 PENDING_CATEGORY_TTL = 300  # 秒
+ADMIN_TOKEN_EXPIRY = 3600 * 24  # Token 24小时过期
+MAX_LOGIN_ATTEMPTS = 5  # 最大登录尝试次数
+LOGIN_LOCKOUT_TIME = 300  # 锁定时间（秒）
+
+# 登录失败记录（内存，按 IP）
+LOGIN_ATTEMPTS = {}
 
 security = HTTPBearer()
 
@@ -2562,7 +2568,15 @@ def verify_admin_token(credentials: HTTPAuthorizationCredentials = Depends(secur
         payload = jwt.decode(token, ADMIN_SECRET, algorithms=["HS256"])
         if payload.get("type") != "admin":
             raise HTTPException(status_code=403, detail="Invalid token")
+        
+        # 检查 Token 是否过期
+        timestamp = payload.get("timestamp", 0)
+        if int(time.time()) - timestamp > ADMIN_TOKEN_EXPIRY:
+            raise HTTPException(status_code=403, detail="Token expired")
+        
         return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=403, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=403, detail="Invalid token")
 
@@ -2581,8 +2595,26 @@ async def admin_page():
 
 @app.post("/api/admin/login")
 async def admin_login(request: Request):
-    """管理员登录"""
+    """管理员登录（带失败次数限制）"""
     try:
+        # 获取客户端 IP
+        client_ip = request.client.host if request.client else "unknown"
+        
+        # 检查是否被锁定
+        if client_ip in LOGIN_ATTEMPTS:
+            attempts = LOGIN_ATTEMPTS[client_ip]
+            if attempts["count"] >= MAX_LOGIN_ATTEMPTS:
+                lockout_until = attempts.get("lockout_until", 0)
+                if int(time.time()) < lockout_until:
+                    remaining = lockout_until - int(time.time())
+                    return {
+                        "success": False,
+                        "error": f"登录失败次数过多，请 {remaining} 秒后再试"
+                    }
+                else:
+                    # 锁定时间已过，重置
+                    LOGIN_ATTEMPTS.pop(client_ip, None)
+        
         data = await request.json()
         password = data.get("password", "")
         
@@ -2590,11 +2622,35 @@ async def admin_login(request: Request):
             return {"success": False, "error": "未配置管理员密码"}
         
         if password != ADMIN_PASSWORD:
-            return {"success": False, "error": "密码错误"}
+            # 记录失败次数
+            if client_ip not in LOGIN_ATTEMPTS:
+                LOGIN_ATTEMPTS[client_ip] = {"count": 0}
+            LOGIN_ATTEMPTS[client_ip]["count"] += 1
+            
+            # 如果超过最大次数，锁定
+            if LOGIN_ATTEMPTS[client_ip]["count"] >= MAX_LOGIN_ATTEMPTS:
+                LOGIN_ATTEMPTS[client_ip]["lockout_until"] = int(time.time()) + LOGIN_LOCKOUT_TIME
+                return {
+                    "success": False,
+                    "error": f"登录失败次数过多，账户已锁定 {LOGIN_LOCKOUT_TIME} 秒"
+                }
+            
+            remaining = MAX_LOGIN_ATTEMPTS - LOGIN_ATTEMPTS[client_ip]["count"]
+            return {
+                "success": False,
+                "error": f"密码错误，还可尝试 {remaining} 次"
+            }
         
-        # 生成Token
+        # 登录成功，清除失败记录
+        LOGIN_ATTEMPTS.pop(client_ip, None)
+        
+        # 生成Token（24小时过期）
         token = jwt.encode(
-            {"type": "admin", "timestamp": int(time.time())},
+            {
+                "type": "admin",
+                "timestamp": int(time.time()),
+                "exp": int(time.time()) + ADMIN_TOKEN_EXPIRY
+            },
             ADMIN_SECRET,
             algorithm="HS256"
         )
