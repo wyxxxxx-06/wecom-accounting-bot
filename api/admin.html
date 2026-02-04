@@ -1198,36 +1198,69 @@
             else if (section === 'categories') loadCategories();
         }
 
-        // 通用fetch函数，带token刷新和错误处理
-        async function fetchWithAuth(url, options = {}) {
+        // 通用fetch函数，带token刷新、错误处理和重试机制
+        async function fetchWithAuth(url, options = {}, retries = 3) {
             const token = sessionStorage.getItem('admin_token');
             if (!token) {
                 throw new Error('未登录');
             }
             
-            const response = await fetch(url, {
-                ...options,
-                headers: {
-                    ...options.headers,
-                    'Authorization': `Bearer ${token}`,
-                    'Cache-Control': 'no-cache',
-                    'Pragma': 'no-cache'
-                },
-                cache: 'no-cache'
-            });
-            
-            if (response.status === 401 || response.status === 403) {
-                sessionStorage.removeItem('admin_token');
-                alert('登录已过期，请重新登录');
-                window.location.reload();
-                throw new Error('登录已过期');
+            for (let i = 0; i < retries; i++) {
+                try {
+                    // 添加超时控制
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
+                    
+                    const response = await fetch(url, {
+                        ...options,
+                        signal: controller.signal,
+                        headers: {
+                            ...options.headers,
+                            'Authorization': `Bearer ${token}`,
+                            'Cache-Control': 'no-cache',
+                            'Pragma': 'no-cache'
+                        },
+                        cache: 'no-cache'
+                    });
+                    
+                    clearTimeout(timeoutId);
+                    
+                    if (response.status === 401 || response.status === 403) {
+                        sessionStorage.removeItem('admin_token');
+                        alert('登录已过期，请重新登录');
+                        window.location.reload();
+                        throw new Error('登录已过期');
+                    }
+                    
+                    // 如果响应不OK，但不是401/403，也重试
+                    if (!response.ok && i < retries - 1) {
+                        await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1))); // 递增延迟
+                        continue;
+                    }
+                    
+                    return response;
+                } catch (error) {
+                    // 如果是最后一次重试，抛出错误
+                    if (i === retries - 1) {
+                        // 网络错误或超时，静默重试一次
+                        if (error.name === 'AbortError' || error.message.includes('fetch')) {
+                            console.warn(`请求失败，正在重试 (${i + 1}/${retries}):`, url);
+                            if (i < retries - 1) {
+                                await new Promise(resolve => setTimeout(resolve, 2000));
+                                continue;
+                            }
+                        }
+                        throw error;
+                    }
+                    // 等待后重试
+                    await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+                }
             }
-            
-            return response;
         }
 
         // 加载概览
-        async function loadOverview() {
+        async function loadOverview(retryCount = 0) {
+            const maxRetries = 2;
             try {
                 const response = await fetchWithAuth('/api/admin/overview');
                 const data = await response.json();
@@ -1238,25 +1271,40 @@
                     document.getElementById('categoryCount').textContent = data.category_count || 0;
                 }
                 
-                // 加载周统计
-                const weekResponse = await fetchWithAuth('/api/admin/weekly_stats');
-                const weekData = await weekResponse.json();
-                if (weekData.success) {
-                    document.getElementById('weekAmount').textContent = weekData.total_amount.toFixed(2) + ' 元';
+                // 加载周统计（失败不影响主流程）
+                try {
+                    const weekResponse = await fetchWithAuth('/api/admin/weekly_stats');
+                    const weekData = await weekResponse.json();
+                    if (weekData.success) {
+                        document.getElementById('weekAmount').textContent = weekData.total_amount.toFixed(2) + ' 元';
+                    }
+                } catch (e) {
+                    console.warn('加载周统计失败:', e);
                 }
                 
-                // 加载平均每日支出
-                const avgResponse = await fetchWithAuth('/api/admin/avg_daily?period=month');
-                const avgData = await avgResponse.json();
-                if (avgData.success) {
-                    document.getElementById('avgDaily').textContent = avgData.avg_daily.toFixed(2) + ' 元';
+                // 加载平均每日支出（失败不影响主流程）
+                try {
+                    const avgResponse = await fetchWithAuth('/api/admin/avg_daily?period=month');
+                    const avgData = await avgResponse.json();
+                    if (avgData.success) {
+                        document.getElementById('avgDaily').textContent = avgData.avg_daily.toFixed(2) + ' 元';
+                    }
+                } catch (e) {
+                    console.warn('加载平均每日支出失败:', e);
                 }
                 
-                // 加载对比分析
-                loadComparison('month');
-                loadComparison('year');
+                // 加载对比分析（失败不影响主流程）
+                try {
+                    loadComparison('month');
+                    loadComparison('year');
+                } catch (e) {
+                    console.warn('加载对比分析失败:', e);
+                }
             } catch (e) {
                 console.error('加载概览失败:', e);
+                if (retryCount < maxRetries) {
+                    setTimeout(() => loadOverview(retryCount + 1), 1000 * (retryCount + 1));
+                }
             }
         }
         
@@ -1327,8 +1375,8 @@
         // 加载记录列表
         let selectedRecords = new Set();
         
-        async function loadRecords(page = 1) {
-            const token = sessionStorage.getItem('admin_token');
+        async function loadRecords(page = 1, retryCount = 0) {
+            const maxRetries = 2;
             const search = document.getElementById('searchInput').value;
             const dateFrom = document.getElementById('dateFrom').value;
             const dateTo = document.getElementById('dateTo').value;
@@ -1346,6 +1394,12 @@
                 ...(amountMax && {amount_max: amountMax}),
                 ...(categoryFilter.length > 0 && {categories: categoryFilter.join(',')})
             });
+            
+            // 显示加载状态
+            if (retryCount === 0) {
+                const tbody = document.getElementById('recordsTable');
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 40px; color: #999;">⏳ 加载中...</td></tr>';
+            }
             
             try {
                 const response = await fetchWithAuth(`/api/admin/records?${params}`);
@@ -1397,9 +1451,26 @@
                     }
                     currentPage = page;
                     updateSelectedCount();
+                } else {
+                    throw new Error(data.error || '加载失败');
                 }
             } catch (e) {
                 console.error('加载记录失败:', e);
+                if (retryCount < maxRetries) {
+                    // 静默重试
+                    setTimeout(() => loadRecords(page, retryCount + 1), 1000 * (retryCount + 1));
+                } else {
+                    // 显示错误信息
+                    const tbody = document.getElementById('recordsTable');
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="8" style="text-align: center; padding: 40px;">
+                                <div style="color: #e74c3c; margin-bottom: 15px;">❌ 加载失败，请重试</div>
+                                <button class="btn" onclick="loadRecords(${page})" style="width: auto; padding: 10px 24px;">重试</button>
+                            </td>
+                        </tr>
+                    `;
+                }
             }
         }
         
@@ -1609,7 +1680,8 @@
         }
 
         // 加载统计
-        async function loadStats() {
+        async function loadStats(retryCount = 0) {
+            const maxRetries = 2;
             const token = sessionStorage.getItem('admin_token');
             if (!token) {
                 alert('请先登录');
@@ -1855,9 +1927,18 @@
                         },
                         plugins: [ChartDataLabels]
                     });
+                } else {
+                    throw new Error(data.error || '加载失败');
                 }
             } catch (e) {
                 console.error('加载统计失败:', e);
+                if (retryCount < maxRetries) {
+                    // 静默重试
+                    setTimeout(() => loadStats(retryCount + 1), 1000 * (retryCount + 1));
+                } else {
+                    // 显示错误提示（但不阻止用户操作）
+                    console.warn('统计加载失败，请刷新页面重试');
+                }
             }
         }
 
@@ -1994,7 +2075,15 @@
         let currentDate = null;
 
         // 加载月度统计
-        async function loadMonthlyStats() {
+        async function loadMonthlyStats(retryCount = 0) {
+            const maxRetries = 2;
+            const contentDiv = document.getElementById('tableStatsContent');
+            
+            // 显示加载状态
+            if (retryCount === 0) {
+                contentDiv.innerHTML = '<div style="text-align: center; padding: 40px; color: #999;">⏳ 加载中...</div>';
+            }
+            
             try {
                 const response = await fetchWithAuth('/api/admin/monthly_stats');
                 const data = await response.json();
@@ -2029,15 +2118,29 @@
                     
                     // 加载年份分类统计（放在下方）
                     loadCategoryStats('year', data.year);
+                } else {
+                    throw new Error(data.error || '加载失败');
                 }
             } catch (e) {
                 console.error('加载月度统计失败:', e);
-                alert('❌ 加载月度统计失败: ' + e.message);
+                if (retryCount < maxRetries) {
+                    // 静默重试
+                    setTimeout(() => loadMonthlyStats(retryCount + 1), 1000 * (retryCount + 1));
+                } else {
+                    // 显示错误信息，但不阻止用户操作
+                    contentDiv.innerHTML = `
+                        <div style="text-align: center; padding: 40px;">
+                            <div style="color: #e74c3c; margin-bottom: 15px;">❌ 加载失败，请刷新页面重试</div>
+                            <button class="btn" onclick="loadMonthlyStats()" style="width: auto; padding: 10px 24px;">重试</button>
+                        </div>
+                    `;
+                }
             }
         }
 
         // 加载每日统计
-        async function loadDailyStats(year, month) {
+        async function loadDailyStats(year, month, retryCount = 0) {
+            const maxRetries = 2;
             try {
                 const response = await fetchWithAuth(`/api/admin/daily_stats?year=${year}&month=${month}`);
                 const data = await response.json();
@@ -2053,6 +2156,10 @@
                     document.getElementById('detailList').style.display = 'none';
                     
                     const dayList = document.getElementById('dayList');
+                    if (retryCount === 0) {
+                        dayList.innerHTML = '<div style="text-align: center; padding: 20px; color: #999;">⏳ 加载中...</div>';
+                    }
+                    
                     dayList.innerHTML = '';
                     
                     data.days.forEach(day => {
@@ -2071,15 +2178,28 @@
                     
                     // 加载月份分类统计（放在日期列表下方）
                     loadCategoryStats('month', year, month);
+                } else {
+                    throw new Error(data.error || '加载失败');
                 }
             } catch (e) {
                 console.error('加载每日统计失败:', e);
-                alert('❌ 加载每日统计失败: ' + e.message);
+                if (retryCount < maxRetries) {
+                    setTimeout(() => loadDailyStats(year, month, retryCount + 1), 1000 * (retryCount + 1));
+                } else {
+                    const dayList = document.getElementById('dayList');
+                    dayList.innerHTML = `
+                        <div style="text-align: center; padding: 40px;">
+                            <div style="color: #e74c3c; margin-bottom: 15px;">❌ 加载失败，请重试</div>
+                            <button class="btn" onclick="loadDailyStats(${year}, ${month})" style="width: auto; padding: 10px 24px;">重试</button>
+                        </div>
+                    `;
+                }
             }
         }
 
         // 加载日期明细
-        async function loadDateDetails(dateStr) {
+        async function loadDateDetails(dateStr, retryCount = 0) {
+            const maxRetries = 2;
             try {
                 const response = await fetchWithAuth(`/api/admin/date_records?date=${dateStr}`);
                 const data = await response.json();
@@ -2097,6 +2217,9 @@
                     document.getElementById('detailList').style.display = 'block';
                     
                     const detailList = document.getElementById('detailList');
+                    if (retryCount === 0) {
+                        detailList.innerHTML = '<div style="text-align: center; padding: 40px; color: #999;">⏳ 加载中...</div>';
+                    }
                     detailList.innerHTML = `
                         <div class="detail-header">
                             <h4>明细记录</h4>
@@ -2126,10 +2249,22 @@
                     
                     // 加载日期分类统计（放在明细列表下方）
                     loadCategoryStats('date', dateStr);
+                } else {
+                    throw new Error(data.error || '加载失败');
                 }
             } catch (e) {
                 console.error('加载日期明细失败:', e);
-                alert('❌ 加载日期明细失败: ' + e.message);
+                if (retryCount < 2) {
+                    setTimeout(() => loadDateDetails(dateStr, retryCount + 1), 1000 * (retryCount + 1));
+                } else {
+                    const detailList = document.getElementById('detailList');
+                    detailList.innerHTML = `
+                        <div style="text-align: center; padding: 40px;">
+                            <div style="color: #e74c3c; margin-bottom: 15px;">❌ 加载失败，请重试</div>
+                            <button class="btn" onclick="loadDateDetails('${dateStr}')" style="width: auto; padding: 10px 24px;">重试</button>
+                        </div>
+                    `;
+                }
             }
         }
 
@@ -2138,32 +2273,44 @@
         let currentCategoryType = ''; // year, month, date
         
         async function loadCategoryStats(type, ...args) {
+            const maxRetries = 2;
             currentCategoryType = type;
-            try {
-                let url = '';
-                if (type === 'year') {
-                    const year = args[0];
-                    url = `/api/admin/year_category_stats?year=${year}`;
-                } else if (type === 'month') {
-                    const year = args[0];
-                    const month = args[1];
-                    url = `/api/admin/month_category_stats?year=${year}&month=${month}`;
-                } else if (type === 'date') {
-                    const date = args[0];
-                    url = `/api/admin/date_category_stats?date=${date}`;
+            
+            const doLoad = async (retryCount = 0) => {
+                try {
+                    let url = '';
+                    if (type === 'year') {
+                        const year = args[0];
+                        url = `/api/admin/year_category_stats?year=${year}`;
+                    } else if (type === 'month') {
+                        const year = args[0];
+                        const month = args[1];
+                        url = `/api/admin/month_category_stats?year=${year}&month=${month}`;
+                    } else if (type === 'date') {
+                        const date = args[0];
+                        url = `/api/admin/date_category_stats?date=${date}`;
+                    }
+                    
+                    const response = await fetchWithAuth(url);
+                    const data = await response.json();
+                    if (data.success) {
+                        showAllCategories = false;
+                        const categoryStats = document.getElementById('categoryStats');
+                        categoryStats.style.display = 'block';
+                        renderCategoryStats(data, type, ...args);
+                    } else {
+                        throw new Error(data.error || '加载失败');
+                    }
+                } catch (e) {
+                    console.error('加载分类统计失败:', e);
+                    // 静默重试，失败也不影响主流程
+                    if (retryCount < maxRetries) {
+                        setTimeout(() => doLoad(retryCount + 1), 1000 * (retryCount + 1));
+                    }
                 }
-                
-                const response = await fetchWithAuth(url);
-                const data = await response.json();
-                if (data.success) {
-                    showAllCategories = false;
-                    const categoryStats = document.getElementById('categoryStats');
-                    categoryStats.style.display = 'block';
-                    renderCategoryStats(data, type, ...args);
-                }
-            } catch (e) {
-                console.error('加载分类统计失败:', e);
-            }
+            };
+            
+            await doLoad();
         }
 
         // 渲染分类统计
