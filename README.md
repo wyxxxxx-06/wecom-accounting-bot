@@ -115,6 +115,7 @@ CREATE INDEX idx_category_aliases_category ON category_aliases(category);
    - `WECHAT_TOKEN` = 自定义 Token（随机字符串）
    - `SUPABASE_URL` = 你的 Supabase URL
    - `SUPABASE_KEY` = 你的 Supabase Key
+   - `ADMIN_PASSWORD` = 管理后台密码（可选，设置后可通过网页管理数据）
 
 ### 第四步：配置微信公众号
 
@@ -225,3 +226,30 @@ CREATE INDEX idx_category_aliases_category ON category_aliases(category);
 | 教育 | 书、课程、培训... |
 | 生活用品 | 洗发水、纸巾、洗衣液、清洁... |
 | 其他 | 无法识别时归入此类 |
+
+## 管理后台（网页版）
+
+### 功能特点
+- ✅ 密码保护（设置 `ADMIN_PASSWORD` 环境变量）
+- ✅ 数据概览（总记录数、总支出、本月支出等）
+- ✅ 记录列表（查询、筛选、分页、在线编辑）
+- ✅ 图形统计（分类占比饼图、月度趋势图）
+- ✅ 批量导入（上传 Excel 批量修改）
+- ✅ 分类管理（查看、重命名分类）
+
+### 访问方式
+1. 在环境变量中设置 `ADMIN_PASSWORD`（你的管理密码）
+2. 浏览器打开：`https://你的域名/api/admin`
+3. 输入密码登录
+
+### 安全说明
+- 🔒 密码存储在环境变量中，不会泄露
+- 🔒 使用 JWT Token 认证，每次登录生成新 Token
+- 🔒 所有数据操作都需要登录验证
+- ⚠️ 建议使用 HTTPS（Render/Vercel 默认支持）
+- ⚠️ 密码不要设置得太简单
+
+### 使用建议
+- 定期修改密码（更新环境变量后重新部署）
+- 不要在公共电脑上登录
+- 退出时点击"退出登录"清除 Token
