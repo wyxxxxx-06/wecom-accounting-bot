@@ -745,17 +745,56 @@ def parse_category(text: str) -> str:
 
 def match_alias_category(text: str) -> str:
     """匹配已学习的别名分类"""
-    text_lower = text.lower()
+    text_lower = text.lower().strip()
     aliases = get_category_aliases()
+    
+    # 1. 精确匹配（优先）
+    if text_lower in aliases:
+        return aliases[text_lower]
+    
+    # 2. 包含匹配
     for keyword, category in aliases.items():
-        if keyword in text_lower:
+        if keyword in text_lower or text_lower in keyword:
             return category
+    
+    # 3. 从历史记录中查找相同描述的分类（精确匹配）
+    try:
+        supabase = get_supabase_client()
+        result = supabase.table("records").select("category,description").eq("description", text).order("created_at", desc=True).limit(1).execute()
+        if result.data:
+            return result.data[0].get("category", "")
+    except Exception:
+        pass
+    
+    # 4. 从历史记录中查找包含该关键词的描述（模糊匹配）
+    try:
+        supabase = get_supabase_client()
+        # 查找描述以该关键词开头的记录
+        result = supabase.table("records").select("category,description").ilike("description", f"{text}%").order("created_at", desc=True).limit(5).execute()
+        if result.data:
+            # 找到最匹配的（描述最接近的）
+            best_match = None
+            for record in result.data:
+                desc = record.get("description", "").strip()
+                if desc == text or desc.startswith(text + " "):
+                    best_match = record
+                    break
+            if best_match:
+                return best_match.get("category", "")
+            # 如果没有精确匹配，返回第一个
+            return result.data[0].get("category", "")
+    except Exception:
+        pass
+    
     return ""
 
 
 def get_category_candidates() -> list:
-    """可选分类列表"""
-    categories = list(CATEGORY_KEYWORDS.keys())
+    """可选分类列表（从数据库获取实际分类）"""
+    categories = get_all_categories()
+    if not categories:
+        # 如果没有分类，返回默认分类
+        categories = list(CATEGORY_KEYWORDS.keys())
     if "其他" not in categories:
         categories.append("其他")
     return categories
@@ -1819,6 +1858,8 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                     }
                     return build_category_pick_prompt(parsed["description"], parsed["amount"], categories)
                 category = alias_category
+                # 自动学习：如果从历史记录匹配到分类，也记录下来
+                add_category_alias(parsed["description"], category)
             add_record(
                 openid=openid,
                 nickname=nickname,
