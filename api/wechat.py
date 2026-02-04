@@ -1307,12 +1307,39 @@ def parse_import_excel(file_bytes: bytes) -> dict:
                 amount = float(amount)
             except (ValueError, TypeError):
                 continue
-            updates.append({
+            
+            # 解析日期时间
+            created_at = None
+            if date_str and time_str:
+                try:
+                    date_str_clean = str(date_str).strip()
+                    time_str_clean = str(time_str).strip()
+                    # 尝试解析日期时间
+                    if "-" in date_str_clean:
+                        # 格式：2026-01-15
+                        dt_str = f"{date_str_clean} {time_str_clean}"
+                        dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+                    elif "/" in date_str_clean:
+                        # 格式：2026/01/15
+                        dt_str = f"{date_str_clean.replace('/', '-')} {time_str_clean}"
+                        dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+                    else:
+                        # 尝试其他格式
+                        dt = datetime.strptime(f"{date_str_clean} {time_str_clean}", "%Y-%m-%d %H:%M")
+                    created_at = dt.replace(tzinfo=LOCAL_TZ)
+                except (ValueError, AttributeError):
+                    # 如果解析失败，保持原值（不更新时间）
+                    pass
+            
+            update_item = {
                 "id": int(record_id),
                 "description": str(description).strip(),
                 "amount": amount,
                 "category": str(category).strip()
-            })
+            }
+            if created_at:
+                update_item["created_at"] = to_utc_iso(created_at)
+            updates.append(update_item)
         return {"updates": updates}
     except Exception as e:
         print(f"解析导入 Excel 错误: {str(e)[:100]}")
@@ -1320,17 +1347,22 @@ def parse_import_excel(file_bytes: bytes) -> dict:
 
 
 def batch_update_records(updates: list) -> dict:
-    """批量更新记录"""
+    """批量更新记录（支持修改日期时间）"""
     supabase = get_supabase_client()
     success = 0
     failed = []
     for upd in updates:
         try:
-            result = supabase.table("records").update({
+            update_data = {
                 "description": upd["description"],
                 "amount": upd["amount"],
                 "category": upd["category"]
-            }).eq("id", upd["id"]).execute()
+            }
+            # 如果提供了新的日期时间，也更新
+            if "created_at" in upd:
+                update_data["created_at"] = upd["created_at"]
+            
+            result = supabase.table("records").update(update_data).eq("id", upd["id"]).execute()
             if result.data:
                 success += 1
             else:
@@ -2362,7 +2394,16 @@ async def export_excel(request: Request):
         limit = 10000 if period == "all" else 1000
         data = build_export_excel_bytes(records, start_date, end_date, limit=limit)
         
-        filename = f"records-{period}.xlsx"
+        # 生成文件名：导出时间_范围.xlsx
+        export_time = datetime.now(LOCAL_TZ).strftime("%Y%m%d_%H%M%S")
+        if period.startswith("month:"):
+            month_text = period.split("month:", 1)[1]
+            range_text = month_text.replace("-", "")
+        elif period == "all":
+            range_text = "全部"
+        else:
+            range_text = period
+        filename = f"记账记录_{export_time}_{range_text}.xlsx"
         headers = {
             "Content-Disposition": f'attachment; filename="{filename}"'
         }
