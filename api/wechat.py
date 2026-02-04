@@ -12,11 +12,14 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from urllib.parse import unquote
 
-from fastapi import FastAPI, Request, Response, UploadFile, File
+from fastapi import FastAPI, Request, Response, UploadFile, File, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import httpx
+import jwt
+import secrets
 
 app = FastAPI()
 
@@ -28,6 +31,8 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 REPORT_TOKEN = os.environ.get("REPORT_TOKEN", "")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+ADMIN_SECRET = os.environ.get("ADMIN_SECRET", secrets.token_urlsafe(32))
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "730"))  # 默认保存2年
 ARCHIVE_BATCH = 200
 EXPORT_TTL_SECONDS = 600
@@ -36,6 +41,8 @@ UTC_TZ = ZoneInfo("UTC")
 PENDING_DELETE_TTL = 300  # 秒
 ALIAS_CACHE_TTL = 600
 PENDING_CATEGORY_TTL = 300  # 秒
+
+security = HTTPBearer()
 
 # 待确认删除（内存，按 openid）
 PENDING_DELETES = {}
@@ -2444,7 +2451,7 @@ async def import_categories_page():
 
 
 @app.post("/api/import")
-async def import_excel(file: UploadFile = File(...)):
+async def import_excel(file: UploadFile = File(...), request: Request = None):
     """批量导入修改后的 Excel（从明细表读取）"""
     try:
         file_bytes = await file.read()
@@ -2545,3 +2552,304 @@ async def report_monthly(request: Request):
     except Exception as e:
         print(f"月报推送错误: {str(e)[:100]}")
         return Response(content="error", status_code=500)
+
+
+# ============ 管理后台 ============
+def verify_admin_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """验证管理员Token"""
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(token, ADMIN_SECRET, algorithms=["HS256"])
+        if payload.get("type") != "admin":
+            raise HTTPException(status_code=403, detail="Invalid token")
+        return payload
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=403, detail="Invalid token")
+
+
+@app.get("/api/admin", response_class=HTMLResponse)
+async def admin_page():
+    """管理后台页面"""
+    import os
+    admin_html_path = os.path.join(os.path.dirname(__file__), "admin.html")
+    try:
+        with open(admin_html_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return "<h1>管理后台页面未找到</h1>"
+
+
+@app.post("/api/admin/login")
+async def admin_login(request: Request):
+    """管理员登录"""
+    try:
+        data = await request.json()
+        password = data.get("password", "")
+        
+        if not ADMIN_PASSWORD:
+            return {"success": False, "error": "未配置管理员密码"}
+        
+        if password != ADMIN_PASSWORD:
+            return {"success": False, "error": "密码错误"}
+        
+        # 生成Token
+        token = jwt.encode(
+            {"type": "admin", "timestamp": int(time.time())},
+            ADMIN_SECRET,
+            algorithm="HS256"
+        )
+        
+        return {"success": True, "token": token}
+    except Exception as e:
+        print(f"登录错误: {str(e)[:100]}")
+        return {"success": False, "error": "登录失败"}
+
+
+@app.get("/api/admin/overview")
+async def admin_overview(payload: dict = Depends(verify_admin_token)):
+    """数据概览"""
+    try:
+        now = datetime.now(LOCAL_TZ)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        
+        # 总记录数
+        all_records = get_records()
+        total_count = len(all_records)
+        total_amount = sum(float(r["amount"]) for r in all_records)
+        
+        # 本月记录
+        month_records = filter_records_by_local_range(all_records, month_start, now + timedelta(days=1))
+        month_amount = sum(float(r["amount"]) for r in month_records)
+        
+        # 分类数量
+        categories = set(r["category"] for r in all_records)
+        category_count = len(categories)
+        
+        return {
+            "success": True,
+            "total_count": total_count,
+            "total_amount": total_amount,
+            "month_amount": month_amount,
+            "category_count": category_count
+        }
+    except Exception as e:
+        print(f"概览错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/records")
+async def admin_records(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """记录列表（分页、查询）"""
+    try:
+        params = dict(request.query_params)
+        page = int(params.get("page", 1))
+        page_size = int(params.get("page_size", 50))
+        search = params.get("search", "")
+        date_from = params.get("date_from", "")
+        date_to = params.get("date_to", "")
+        
+        # 获取所有记录
+        start_date = None
+        end_date = None
+        if date_from:
+            start_date = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=LOCAL_TZ)
+        if date_to:
+            end_date = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=LOCAL_TZ) + timedelta(days=1)
+        
+        records = get_records(start_date=start_date, end_date=end_date)
+        
+        # 搜索过滤
+        if search:
+            search_lower = search.lower()
+            records = [
+                r for r in records
+                if search_lower in r.get("description", "").lower() or
+                   search_lower in r.get("category", "").lower()
+            ]
+        
+        # 格式化
+        formatted = []
+        for r in records:
+            dt = to_local_datetime(r["created_at"])
+            formatted.append({
+                "id": r["id"],
+                "date": dt.strftime("%Y-%m-%d"),
+                "time": dt.strftime("%H:%M"),
+                "description": r.get("description", ""),
+                "amount": float(r.get("amount", 0)),
+                "category": r.get("category", "")
+            })
+        
+        # 分页
+        total = len(formatted)
+        start = (page - 1) * page_size
+        end = start + page_size
+        paginated = formatted[start:end]
+        
+        return {
+            "success": True,
+            "records": paginated,
+            "total": total,
+            "page": page,
+            "page_size": page_size
+        }
+    except Exception as e:
+        print(f"记录列表错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.put("/api/admin/records/{record_id}")
+async def admin_update_record(
+    record_id: int,
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """更新记录"""
+    try:
+        data = await request.json()
+        date_str = data.get("date", "")
+        time_str = data.get("time", "")
+        description = data.get("description", "")
+        amount = float(data.get("amount", 0))
+        category = data.get("category", "")
+        
+        # 合并日期时间
+        if date_str and time_str:
+            dt_str = f"{date_str} {time_str}"
+            dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+            created_at = dt.replace(tzinfo=LOCAL_TZ)
+        else:
+            created_at = None
+        
+        update_data = {
+            "description": description,
+            "amount": amount,
+            "category": category
+        }
+        if created_at:
+            update_data["created_at"] = to_utc_iso(created_at)
+        
+        supabase = get_supabase_client()
+        result = supabase.table("records").update(update_data).eq("id", record_id).execute()
+        
+        if result.data:
+            return {"success": True}
+        else:
+            return {"success": False, "error": "更新失败"}
+    except Exception as e:
+        print(f"更新记录错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.delete("/api/admin/records/{record_id}")
+async def admin_delete_record(
+    record_id: int,
+    payload: dict = Depends(verify_admin_token)
+):
+    """删除记录"""
+    try:
+        result = delete_record(record_id)
+        if result.data:
+            return {"success": True}
+        else:
+            return {"success": False, "error": "删除失败"}
+    except Exception as e:
+        print(f"删除记录错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/stats")
+async def admin_stats(payload: dict = Depends(verify_admin_token)):
+    """统计数据（用于图表）"""
+    try:
+        records = get_records()
+        
+        # 分类统计
+        category_amounts = {}
+        for r in records:
+            cat = r.get("category", "其他")
+            amount = float(r.get("amount", 0))
+            category_amounts[cat] = category_amounts.get(cat, 0) + amount
+        
+        category_labels = list(category_amounts.keys())
+        category_amounts_list = [category_amounts[c] for c in category_labels]
+        
+        # 月度趋势（近12个月）
+        monthly_amounts = {}
+        for r in records:
+            dt = to_local_datetime(r["created_at"])
+            month_key = dt.strftime("%Y-%m")
+            amount = float(r.get("amount", 0))
+            monthly_amounts[month_key] = monthly_amounts.get(month_key, 0) + amount
+        
+        # 排序
+        sorted_months = sorted(monthly_amounts.keys())[-12:]
+        month_labels = sorted_months
+        month_amounts_list = [monthly_amounts[m] for m in sorted_months]
+        
+        return {
+            "success": True,
+            "category_labels": category_labels,
+            "category_amounts": category_amounts_list,
+            "month_labels": month_labels,
+            "month_amounts": month_amounts_list
+        }
+    except Exception as e:
+        print(f"统计错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/categories")
+async def admin_categories(payload: dict = Depends(verify_admin_token)):
+    """分类列表"""
+    try:
+        records = get_records()
+        category_stats = {}
+        
+        for r in records:
+            cat = r.get("category", "其他")
+            amount = float(r.get("amount", 0))
+            if cat not in category_stats:
+                category_stats[cat] = {"count": 0, "amount": 0}
+            category_stats[cat]["count"] += 1
+            category_stats[cat]["amount"] += amount
+        
+        categories = [
+            {
+                "category": cat,
+                "count": stats["count"],
+                "amount": stats["amount"]
+            }
+            for cat, stats in sorted(category_stats.items())
+        ]
+        
+        return {"success": True, "categories": categories}
+    except Exception as e:
+        print(f"分类列表错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/admin/categories/rename")
+async def admin_rename_category(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """重命名分类"""
+    try:
+        data = await request.json()
+        old_name = data.get("old_name", "")
+        new_name = data.get("new_name", "")
+        
+        result = rename_category(old_name, new_name)
+        if result.get("success"):
+            return {"success": True, "count": result.get("count", 0)}
+        else:
+            return {"success": False, "error": result.get("error", "重命名失败")}
+    except Exception as e:
+        print(f"重命名分类错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
