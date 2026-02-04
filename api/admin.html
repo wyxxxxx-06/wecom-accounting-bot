@@ -1261,11 +1261,8 @@
         
         // 加载对比分析
         async function loadComparison(type) {
-            const token = sessionStorage.getItem('admin_token');
             try {
-                const response = await fetch(`/api/admin/comparison?type=${type}`, {
-                    headers: {'Authorization': `Bearer ${token}`}
-                });
+                const response = await fetchWithAuth(`/api/admin/comparison?type=${type}`);
                 const data = await response.json();
                 if (data.success) {
                     const container = document.getElementById(type === 'month' ? 'monthComparison' : 'yearComparison');
@@ -1305,11 +1302,8 @@
                 return;
             }
             
-            const token = sessionStorage.getItem('admin_token');
             try {
-                const response = await fetch('/api/admin/backup', {
-                    headers: {'Authorization': `Bearer ${token}`}
-                });
+                const response = await fetchWithAuth('/api/admin/backup');
                 if (response.ok) {
                     const blob = await response.blob();
                     const downloadUrl = window.URL.createObjectURL(blob);
@@ -1410,11 +1404,8 @@
         
         // 加载分类列表用于筛选
         async function loadCategoriesForFilter() {
-            const token = sessionStorage.getItem('admin_token');
             try {
-                const response = await fetch('/api/admin/categories', {
-                    headers: {'Authorization': `Bearer ${token}`}
-                });
+                const response = await fetchWithAuth('/api/admin/categories');
                 const data = await response.json();
                 if (data.success) {
                     const select = document.getElementById('categoryFilter');
@@ -1482,13 +1473,12 @@
                 return;
             }
             
-            const token = sessionStorage.getItem('admin_token');
             try {
-                const response = await fetch('/api/admin/records/batch_delete', {
+                const token = sessionStorage.getItem('admin_token');
+                const response = await fetchWithAuth('/api/admin/records/batch_delete', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
+                        'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({ids: ids})
                 });
@@ -1527,12 +1517,9 @@
             if (dateTo) url += `&date_to=${dateTo}`;
             if (!dateFrom && !dateTo) url = '/api/admin/export?period=all';
             
-            const token = sessionStorage.getItem('admin_token');
-            const fullUrl = url + `&token=${encodeURIComponent(token)}`;
-            
             // 使用fetch下载文件
             try {
-                const response = await fetch(fullUrl);
+                const response = await fetchWithAuth(url);
                 if (response.ok) {
                     const blob = await response.blob();
                     const downloadUrl = window.URL.createObjectURL(blob);
@@ -1578,11 +1565,10 @@
             };
             
             try {
-                const response = await fetch(`/api/admin/records/${id}`, {
+                const response = await fetchWithAuth(`/api/admin/records/${id}`, {
                     method: 'PUT',
                     headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
+                        'Content-Type': 'application/json'
                     },
                     body: JSON.stringify(data)
                 });
@@ -1603,11 +1589,9 @@
 
         async function deleteRecord(id) {
             if (!confirm('确定要删除这条记录吗？此操作不可恢复！')) return;
-            const token = sessionStorage.getItem('admin_token');
             try {
-                const response = await fetch(`/api/admin/records/${id}`, {
-                    method: 'DELETE',
-                    headers: {'Authorization': `Bearer ${token}`}
+                const response = await fetchWithAuth(`/api/admin/records/${id}`, {
+                    method: 'DELETE'
                 });
                 const result = await response.json();
                 if (result.success) {
@@ -1907,11 +1891,8 @@
 
         // 加载分类
         async function loadCategories() {
-            const token = sessionStorage.getItem('admin_token');
             try {
-                const response = await fetch('/api/admin/categories', {
-                    headers: {'Authorization': `Bearer ${token}`}
-                });
+                const response = await fetchWithAuth('/api/admin/categories');
                 const data = await response.json();
                 if (data.success) {
                     const tbody = document.getElementById('categoriesTable');
@@ -1939,12 +1920,10 @@
             const newName = prompt(`重命名分类 "${oldName}" 为：`, oldName);
             if (!newName || newName === oldName || !newName.trim()) return;
             
-            const token = sessionStorage.getItem('admin_token');
-            fetch('/api/admin/categories/rename', {
+            fetchWithAuth('/api/admin/categories/rename', {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
+                    'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({old_name: oldName, new_name: newName.trim()})
             })
@@ -1976,11 +1955,8 @@
 
         // 加载月度统计
         async function loadMonthlyStats() {
-            const token = sessionStorage.getItem('admin_token');
             try {
-                const response = await fetch('/api/admin/monthly_stats', {
-                    headers: {'Authorization': `Bearer ${token}`}
-                });
+                const response = await fetchWithAuth('/api/admin/monthly_stats');
                 const data = await response.json();
                 if (data.success) {
                     currentView = 'months';
@@ -2022,11 +1998,8 @@
 
         // 加载每日统计
         async function loadDailyStats(year, month) {
-            const token = sessionStorage.getItem('admin_token');
             try {
-                const response = await fetch(`/api/admin/daily_stats?year=${year}&month=${month}`, {
-                    headers: {'Authorization': `Bearer ${token}`}
-                });
+                const response = await fetchWithAuth(`/api/admin/daily_stats?year=${year}&month=${month}`);
                 const data = await response.json();
                 if (data.success) {
                     currentView = 'days';
@@ -2067,11 +2040,8 @@
 
         // 加载日期明细
         async function loadDateDetails(dateStr) {
-            const token = sessionStorage.getItem('admin_token');
             try {
-                const response = await fetch(`/api/admin/date_records?date=${dateStr}`, {
-                    headers: {'Authorization': `Bearer ${token}`}
-                });
+                const response = await fetchWithAuth(`/api/admin/date_records?date=${dateStr}`);
                 const data = await response.json();
                 if (data.success) {
                     currentView = 'details';
@@ -2128,7 +2098,6 @@
         let currentCategoryType = ''; // year, month, date
         
         async function loadCategoryStats(type, ...args) {
-            const token = sessionStorage.getItem('admin_token');
             currentCategoryType = type;
             try {
                 let url = '';
@@ -2144,9 +2113,7 @@
                     url = `/api/admin/date_category_stats?date=${date}`;
                 }
                 
-                const response = await fetch(url, {
-                    headers: {'Authorization': `Bearer ${token}`}
-                });
+                const response = await fetchWithAuth(url);
                 const data = await response.json();
                 if (data.success) {
                     showAllCategories = false;
@@ -2220,7 +2187,6 @@
 
         // 查看分类明细
         function viewCategoryDetails(category, type, ...args) {
-            const token = sessionStorage.getItem('admin_token');
             let url = `/api/admin/category_records?category=${encodeURIComponent(category)}`;
             
             if (type === 'year') {
@@ -2229,9 +2195,7 @@
                 url += `&year=${args[0]}&month=${args[1]}`;
             }
             
-            fetch(url, {
-                headers: {'Authorization': `Bearer ${token}`}
-            })
+            fetchWithAuth(url)
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
