@@ -2666,12 +2666,16 @@ async def admin_overview(payload: dict = Depends(verify_admin_token)):
     """数据概览"""
     try:
         now = datetime.now(LOCAL_TZ)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         
         # 总记录数
         all_records = get_records()
         total_count = len(all_records)
-        total_amount = sum(float(r["amount"]) for r in all_records)
+        
+        # 今日记录
+        today_records = filter_records_by_local_range(all_records, today_start, now + timedelta(days=1))
+        today_amount = sum(float(r["amount"]) for r in today_records)
         
         # 本月记录
         month_records = filter_records_by_local_range(all_records, month_start, now + timedelta(days=1))
@@ -2684,7 +2688,7 @@ async def admin_overview(payload: dict = Depends(verify_admin_token)):
         return {
             "success": True,
             "total_count": total_count,
-            "total_amount": total_amount,
+            "today_amount": today_amount,
             "month_amount": month_amount,
             "category_count": category_count
         }
@@ -2906,6 +2910,141 @@ async def admin_rename_category(
             return {"success": False, "error": result.get("error", "重命名失败")}
     except Exception as e:
         print(f"重命名分类错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/monthly_stats")
+async def admin_monthly_stats(payload: dict = Depends(verify_admin_token)):
+    """获取今年所有月份的统计"""
+    try:
+        now = datetime.now(LOCAL_TZ)
+        year = now.year
+        all_records = get_records()
+        
+        monthly_stats = {}
+        for month in range(1, 13):
+            month_start = datetime(year, month, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            if month == 12:
+                month_end = datetime(year + 1, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            else:
+                month_end = datetime(year, month + 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            
+            month_records = filter_records_by_local_range(all_records, month_start, month_end)
+            month_amount = sum(float(r["amount"]) for r in month_records)
+            month_count = len(month_records)
+            
+            monthly_stats[f"{year}-{month:02d}"] = {
+                "month": month,
+                "amount": month_amount,
+                "count": month_count
+            }
+        
+        return {
+            "success": True,
+            "year": year,
+            "months": monthly_stats
+        }
+    except Exception as e:
+        print(f"月度统计错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/daily_stats")
+async def admin_daily_stats(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """获取指定月份的每日统计"""
+    try:
+        params = dict(request.query_params)
+        year = int(params.get("year", datetime.now(LOCAL_TZ).year))
+        month = int(params.get("month", datetime.now(LOCAL_TZ).month))
+        
+        month_start = datetime(year, month, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+        if month == 12:
+            month_end = datetime(year + 1, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+        else:
+            month_end = datetime(year, month + 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+        
+        all_records = get_records()
+        month_records = filter_records_by_local_range(all_records, month_start, month_end)
+        
+        daily_stats = {}
+        for r in month_records:
+            dt = to_local_datetime(r["created_at"])
+            day_key = dt.strftime("%Y-%m-%d")
+            amount = float(r["amount"])
+            if day_key not in daily_stats:
+                daily_stats[day_key] = {"amount": 0, "count": 0}
+            daily_stats[day_key]["amount"] += amount
+            daily_stats[day_key]["count"] += 1
+        
+        # 生成该月所有日期（即使没有记录）
+        days = []
+        current = month_start
+        while current < month_end:
+            day_key = current.strftime("%Y-%m-%d")
+            days.append({
+                "date": day_key,
+                "day": current.day,
+                "amount": daily_stats.get(day_key, {}).get("amount", 0),
+                "count": daily_stats.get(day_key, {}).get("count", 0)
+            })
+            current += timedelta(days=1)
+        
+        return {
+            "success": True,
+            "year": year,
+            "month": month,
+            "days": days
+        }
+    except Exception as e:
+        print(f"每日统计错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/date_records")
+async def admin_date_records(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """获取指定日期的明细记录"""
+    try:
+        params = dict(request.query_params)
+        date_str = params.get("date", "")
+        
+        if not date_str:
+            return {"success": False, "error": "缺少日期参数"}
+        
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=LOCAL_TZ)
+        date_start = date_obj
+        date_end = date_obj + timedelta(days=1)
+        
+        all_records = get_records()
+        date_records = filter_records_by_local_range(all_records, date_start, date_end)
+        
+        formatted = []
+        for r in date_records:
+            dt = to_local_datetime(r["created_at"])
+            formatted.append({
+                "id": r["id"],
+                "time": dt.strftime("%H:%M"),
+                "description": r.get("description", ""),
+                "amount": float(r.get("amount", 0)),
+                "category": r.get("category", "")
+            })
+        
+        # 按时间排序
+        formatted.sort(key=lambda x: x["time"])
+        
+        return {
+            "success": True,
+            "date": date_str,
+            "records": formatted,
+            "total": sum(r["amount"] for r in formatted)
+        }
+    except Exception as e:
+        print(f"日期明细错误: {str(e)[:100]}")
         return {"success": False, "error": str(e)}
 
 

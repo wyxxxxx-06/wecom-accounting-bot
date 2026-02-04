@@ -545,6 +545,123 @@
             gap: 12px;
             margin-top: 25px;
         }
+        .month-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 20px;
+        }
+        .month-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 25px;
+            border-radius: 12px;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+        .month-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+        }
+        .month-card h4 {
+            margin: 0 0 10px 0;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .month-card .amount {
+            font-size: 24px;
+            font-weight: 700;
+            margin-top: 8px;
+        }
+        .month-card .count {
+            font-size: 14px;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+        .day-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 15px;
+        }
+        .day-card {
+            background: white;
+            border: 2px solid #e0e0e0;
+            padding: 20px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-align: center;
+        }
+        .day-card:hover {
+            border-color: #667eea;
+            transform: translateY(-3px);
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.2);
+        }
+        .day-card .date {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        .day-card .amount {
+            font-size: 20px;
+            font-weight: 700;
+            color: #e74c3c;
+            margin-top: 5px;
+        }
+        .day-card .count {
+            font-size: 12px;
+            color: #888;
+            margin-top: 5px;
+        }
+        .day-card.no-data {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .detail-list {
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .detail-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px 25px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .detail-header h4 {
+            margin: 0;
+            font-size: 18px;
+        }
+        .detail-header .total {
+            font-size: 20px;
+            font-weight: 700;
+        }
+        .detail-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .detail-table th {
+            background: #f8f9fa;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #333;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        .detail-table td {
+            padding: 15px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .detail-table tr:hover {
+            background: #f8f9fa;
+        }
+        .detail-table .amount {
+            color: #e74c3c;
+            font-weight: 600;
+        }
         .btn-secondary {
             background: #6c757d;
         }
@@ -594,6 +711,7 @@
         <div class="nav">
             <button class="nav-btn active" onclick="showSection('overview')">📈 数据概览</button>
             <button class="nav-btn" onclick="showSection('records')">📝 记录列表</button>
+            <button class="nav-btn" onclick="showSection('table_stats')">📋 表格统计</button>
             <button class="nav-btn" onclick="showSection('stats')">📊 图形统计</button>
             <button class="nav-btn" onclick="showSection('import')">📤 批量导入</button>
             <button class="nav-btn" onclick="showSection('categories')">🏷️ 分类管理</button>
@@ -607,8 +725,8 @@
                         <div class="value" id="totalCount">-</div>
                     </div>
                     <div class="stat-card">
-                        <h3>总支出</h3>
-                        <div class="value" id="totalAmount">-</div>
+                        <h3>今日支出</h3>
+                        <div class="value" id="todayAmount">-</div>
                     </div>
                     <div class="stat-card">
                         <h3>本月支出</h3>
@@ -648,6 +766,24 @@
                         </tbody>
                     </table>
                     <div class="pagination" id="pagination"></div>
+                </div>
+            </div>
+
+            <!-- 表格统计 -->
+            <div class="section" id="table_stats">
+                <div class="table-container">
+                    <div class="table-header">
+                        <h3 id="tableStatsTitle" style="margin: 0; color: #333; font-size: 18px;">今年所有月份</h3>
+                        <button class="btn" id="backBtn" onclick="goBack()" style="width: auto; padding: 10px 24px; display: none;">← 返回</button>
+                    </div>
+                    <div id="tableStatsContent" style="padding: 25px;">
+                        <!-- 月份列表 -->
+                        <div id="monthList" class="month-grid"></div>
+                        <!-- 日期列表 -->
+                        <div id="dayList" class="day-grid" style="display: none;"></div>
+                        <!-- 明细列表 -->
+                        <div id="detailList" class="detail-list" style="display: none;"></div>
+                    </div>
                 </div>
             </div>
 
@@ -812,6 +948,7 @@
             
             if (section === 'overview') loadOverview();
             else if (section === 'records') loadRecords();
+            else if (section === 'table_stats') loadMonthlyStats();
             else if (section === 'stats') loadStats();
             else if (section === 'categories') loadCategories();
         }
@@ -826,7 +963,7 @@
                 const data = await response.json();
                 if (data.success) {
                     document.getElementById('totalCount').textContent = (data.total_count || 0).toLocaleString();
-                    document.getElementById('totalAmount').textContent = (data.total_amount || 0).toFixed(2) + ' 元';
+                    document.getElementById('todayAmount').textContent = (data.today_amount || 0).toFixed(2) + ' 元';
                     document.getElementById('monthAmount').textContent = (data.month_amount || 0).toFixed(2) + ' 元';
                     document.getElementById('categoryCount').textContent = data.category_count || 0;
                 }
@@ -1246,6 +1383,162 @@
 
         function showAddCategoryModal() {
             alert('💡 新增分类：\n\n在「记录列表」或「批量导入」时直接输入新分类名即可自动创建。\n\n例如：在分类列输入「早点」、「宵夜」等新名称，系统会自动创建该分类。');
+        }
+
+        // 表格统计相关变量
+        let currentView = 'months'; // months, days, details
+        let currentYear = new Date().getFullYear();
+        let currentMonth = null;
+        let currentDate = null;
+
+        // 加载月度统计
+        async function loadMonthlyStats() {
+            const token = sessionStorage.getItem('admin_token');
+            try {
+                const response = await fetch('/api/admin/monthly_stats', {
+                    headers: {'Authorization': `Bearer ${token}`}
+                });
+                const data = await response.json();
+                if (data.success) {
+                    currentView = 'months';
+                    currentYear = data.year;
+                    document.getElementById('tableStatsTitle').textContent = `${data.year}年所有月份`;
+                    document.getElementById('backBtn').style.display = 'none';
+                    document.getElementById('monthList').style.display = 'grid';
+                    document.getElementById('dayList').style.display = 'none';
+                    document.getElementById('detailList').style.display = 'none';
+                    
+                    const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', 
+                                     '七月', '八月', '九月', '十月', '十一月', '十二月'];
+                    const monthList = document.getElementById('monthList');
+                    monthList.innerHTML = '';
+                    
+                    for (let month = 1; month <= 12; month++) {
+                        const key = `${data.year}-${String(month).padStart(2, '0')}`;
+                        const stats = data.months[key] || {amount: 0, count: 0};
+                        const card = document.createElement('div');
+                        card.className = 'month-card';
+                        card.onclick = () => loadDailyStats(data.year, month);
+                        card.innerHTML = `
+                            <h4>${monthNames[month - 1]}</h4>
+                            <div class="amount">¥${stats.amount.toFixed(2)}</div>
+                            <div class="count">${stats.count} 条记录</div>
+                        `;
+                        monthList.appendChild(card);
+                    }
+                }
+            } catch (e) {
+                console.error('加载月度统计失败:', e);
+                alert('❌ 加载月度统计失败: ' + e.message);
+            }
+        }
+
+        // 加载每日统计
+        async function loadDailyStats(year, month) {
+            const token = sessionStorage.getItem('admin_token');
+            try {
+                const response = await fetch(`/api/admin/daily_stats?year=${year}&month=${month}`, {
+                    headers: {'Authorization': `Bearer ${token}`}
+                });
+                const data = await response.json();
+                if (data.success) {
+                    currentView = 'days';
+                    currentMonth = month;
+                    const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', 
+                                     '七月', '八月', '九月', '十月', '十一月', '十二月'];
+                    document.getElementById('tableStatsTitle').textContent = `${year}年${monthNames[month - 1]}`;
+                    document.getElementById('backBtn').style.display = 'block';
+                    document.getElementById('monthList').style.display = 'none';
+                    document.getElementById('dayList').style.display = 'grid';
+                    document.getElementById('detailList').style.display = 'none';
+                    
+                    const dayList = document.getElementById('dayList');
+                    dayList.innerHTML = '';
+                    
+                    data.days.forEach(day => {
+                        const card = document.createElement('div');
+                        card.className = 'day-card' + (day.count === 0 ? ' no-data' : '');
+                        if (day.count > 0) {
+                            card.onclick = () => loadDateDetails(day.date);
+                        }
+                        card.innerHTML = `
+                            <div class="date">${day.day}日</div>
+                            <div class="amount">¥${day.amount.toFixed(2)}</div>
+                            <div class="count">${day.count} 条</div>
+                        `;
+                        dayList.appendChild(card);
+                    });
+                }
+            } catch (e) {
+                console.error('加载每日统计失败:', e);
+                alert('❌ 加载每日统计失败: ' + e.message);
+            }
+        }
+
+        // 加载日期明细
+        async function loadDateDetails(dateStr) {
+            const token = sessionStorage.getItem('admin_token');
+            try {
+                const response = await fetch(`/api/admin/date_records?date=${dateStr}`, {
+                    headers: {'Authorization': `Bearer ${token}`}
+                });
+                const data = await response.json();
+                if (data.success) {
+                    currentView = 'details';
+                    currentDate = dateStr;
+                    const dateObj = new Date(dateStr);
+                    const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', 
+                                     '七月', '八月', '九月', '十月', '十一月', '十二月'];
+                    document.getElementById('tableStatsTitle').textContent = 
+                        `${dateObj.getFullYear()}年${monthNames[dateObj.getMonth()]}${dateObj.getDate()}日`;
+                    document.getElementById('backBtn').style.display = 'block';
+                    document.getElementById('monthList').style.display = 'none';
+                    document.getElementById('dayList').style.display = 'none';
+                    document.getElementById('detailList').style.display = 'block';
+                    
+                    const detailList = document.getElementById('detailList');
+                    detailList.innerHTML = `
+                        <div class="detail-header">
+                            <h4>明细记录</h4>
+                            <div class="total">总计: ¥${data.total.toFixed(2)}</div>
+                        </div>
+                        <table class="detail-table">
+                            <thead>
+                                <tr>
+                                    <th>时间</th>
+                                    <th>描述</th>
+                                    <th>分类</th>
+                                    <th>金额</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${data.records.map(r => `
+                                    <tr>
+                                        <td>${r.time}</td>
+                                        <td>${r.description || '-'}</td>
+                                        <td>${r.category || '-'}</td>
+                                        <td class="amount">¥${r.amount.toFixed(2)}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    `;
+                }
+            } catch (e) {
+                console.error('加载日期明细失败:', e);
+                alert('❌ 加载日期明细失败: ' + e.message);
+            }
+        }
+
+        // 返回上一级
+        function goBack() {
+            if (currentView === 'details') {
+                // 从明细返回到日期列表
+                loadDailyStats(currentYear, currentMonth);
+            } else if (currentView === 'days') {
+                // 从日期列表返回到月份列表
+                loadMonthlyStats();
+            }
         }
 
         // 初始化
