@@ -663,7 +663,7 @@
             font-weight: 600;
         }
         .category-stats {
-            margin-bottom: 30px;
+            margin-top: 30px;
             background: white;
             border-radius: 12px;
             padding: 25px;
@@ -765,6 +765,98 @@
             color: #721c24;
             border: 2px solid #dc3545;
         }
+        
+        /* 移动端优化 */
+        @media (max-width: 768px) {
+            .main-container {
+                padding: 15px;
+            }
+            .header {
+                flex-direction: column;
+                gap: 15px;
+                text-align: center;
+            }
+            .header h1 {
+                font-size: 20px;
+            }
+            .nav {
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+            .nav-btn {
+                font-size: 12px;
+                padding: 8px 12px;
+            }
+            .stats-grid {
+                grid-template-columns: 1fr 1fr;
+                gap: 15px;
+            }
+            .stat-card .value {
+                font-size: 24px;
+            }
+            .table-container {
+                overflow-x: auto;
+            }
+            .search-box {
+                flex-direction: column;
+            }
+            .search-box input, .search-box select {
+                width: 100% !important;
+            }
+            .month-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+            .day-grid {
+                grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+            }
+            .category-stats {
+                padding: 15px;
+            }
+            .category-item {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+            .chart-container {
+                padding: 15px;
+            }
+            .chart-wrapper {
+                height: 300px !important;
+            }
+            .table-header {
+                flex-direction: column;
+                gap: 10px;
+            }
+            table {
+                font-size: 12px;
+            }
+            table th, table td {
+                padding: 8px 4px;
+            }
+            .pagination {
+                flex-wrap: wrap;
+            }
+            .pagination button {
+                padding: 6px 10px;
+                font-size: 12px;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            .month-grid {
+                grid-template-columns: 1fr;
+            }
+            .day-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+            .nav-btn {
+                font-size: 11px;
+                padding: 6px 10px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -817,6 +909,45 @@
                         <h3>分类数量</h3>
                         <div class="value" id="categoryCount">-</div>
                     </div>
+                    <div class="stat-card">
+                        <h3>本周支出</h3>
+                        <div class="value" id="weekAmount">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>平均每日支出</h3>
+                        <div class="value" id="avgDaily">-</div>
+                    </div>
+                </div>
+                <div style="margin-top: 30px; display: grid; grid-template-columns: 1fr 1fr; gap: 25px;">
+                    <div class="table-container">
+                        <div class="table-header">
+                            <h3 style="margin: 0;">月度对比</h3>
+                            <button class="btn" onclick="loadComparison('month')" style="width: auto; padding: 8px 16px; font-size: 14px;">刷新</button>
+                        </div>
+                        <div id="monthComparison" style="padding: 20px;">
+                            <div style="text-align: center; color: #999;">加载中...</div>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <div class="table-header">
+                            <h3 style="margin: 0;">年度对比</h3>
+                            <button class="btn" onclick="loadComparison('year')" style="width: auto; padding: 8px 16px; font-size: 14px;">刷新</button>
+                        </div>
+                        <div id="yearComparison" style="padding: 20px;">
+                            <div style="text-align: center; color: #999;">加载中...</div>
+                        </div>
+                    </div>
+                </div>
+                <div style="margin-top: 30px;">
+                    <div class="table-container">
+                        <div class="table-header">
+                            <h3 style="margin: 0;">数据备份</h3>
+                            <button class="btn" onclick="backupData()" style="width: auto; padding: 10px 24px; background: #28a745;">备份所有数据</button>
+                        </div>
+                        <div style="padding: 20px; color: #666;">
+                            <p>💡 备份功能会导出所有记录到Excel文件，建议定期备份以防数据丢失。</p>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -824,16 +955,28 @@
             <div class="section" id="records">
                 <div class="table-container">
                     <div class="table-header">
-                        <div class="search-box">
-                            <input type="text" id="searchInput" placeholder="🔍 搜索描述或分类...">
-                            <input type="date" id="dateFrom" placeholder="开始日期">
-                            <input type="date" id="dateTo" placeholder="结束日期">
+                        <div class="search-box" style="flex-wrap: wrap; gap: 10px;">
+                            <input type="text" id="searchInput" placeholder="🔍 搜索描述或分类..." style="flex: 1; min-width: 200px;">
+                            <input type="date" id="dateFrom" placeholder="开始日期" style="width: 150px;">
+                            <input type="date" id="dateTo" placeholder="结束日期" style="width: 150px;">
+                            <input type="number" id="amountMin" placeholder="最小金额" step="0.01" style="width: 120px;">
+                            <input type="number" id="amountMax" placeholder="最大金额" step="0.01" style="width: 120px;">
+                            <select id="categoryFilter" multiple style="width: 150px; min-height: 40px;" title="按住Ctrl多选分类">
+                                <option value="">全部分类</option>
+                            </select>
                             <button class="btn" onclick="loadRecords()" style="width: auto; padding: 10px 24px;">查询</button>
+                            <button class="btn" onclick="resetFilters()" style="width: auto; padding: 10px 24px; background: #6c757d;">重置</button>
+                        </div>
+                        <div style="display: flex; gap: 10px; margin-top: 10px; align-items: center;">
+                            <button class="btn" onclick="toggleSelectAll()" style="width: auto; padding: 10px 24px; background: #17a2b8;">全选/反选</button>
+                            <button class="btn" onclick="batchDelete()" style="width: auto; padding: 10px 24px; background: #dc3545;" id="batchDeleteBtn" disabled>批量删除 (<span id="selectedCount">0</span>)</button>
+                            <button class="btn" onclick="exportRecords()" style="width: auto; padding: 10px 24px; background: #28a745;">导出Excel</button>
                         </div>
                     </div>
                     <table>
                         <thead>
                             <tr>
+                                <th style="width: 50px;"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll()"></th>
                                 <th>ID</th>
                                 <th>日期</th>
                                 <th>时间</th>
@@ -1050,24 +1193,124 @@
                     document.getElementById('monthAmount').textContent = (data.month_amount || 0).toFixed(2) + ' 元';
                     document.getElementById('categoryCount').textContent = data.category_count || 0;
                 }
+                
+                // 加载周统计
+                const weekResponse = await fetch('/api/admin/weekly_stats', {
+                    headers: {'Authorization': `Bearer ${token}`}
+                });
+                const weekData = await weekResponse.json();
+                if (weekData.success) {
+                    document.getElementById('weekAmount').textContent = weekData.total_amount.toFixed(2) + ' 元';
+                }
+                
+                // 加载平均每日支出
+                const avgResponse = await fetch('/api/admin/avg_daily?period=month', {
+                    headers: {'Authorization': `Bearer ${token}`}
+                });
+                const avgData = await avgResponse.json();
+                if (avgData.success) {
+                    document.getElementById('avgDaily').textContent = avgData.avg_daily.toFixed(2) + ' 元';
+                }
+                
+                // 加载对比分析
+                loadComparison('month');
+                loadComparison('year');
             } catch (e) {
                 console.error('加载概览失败:', e);
             }
         }
+        
+        // 加载对比分析
+        async function loadComparison(type) {
+            const token = sessionStorage.getItem('admin_token');
+            try {
+                const response = await fetch(`/api/admin/comparison?type=${type}`, {
+                    headers: {'Authorization': `Bearer ${token}`}
+                });
+                const data = await response.json();
+                if (data.success) {
+                    const container = document.getElementById(type === 'month' ? 'monthComparison' : 'yearComparison');
+                    const change = data.change || 0;
+                    const changePercent = data.change_percent || 0;
+                    const changeClass = change >= 0 ? 'color: #e74c3c;' : 'color: #28a745;';
+                    const changeIcon = change >= 0 ? '📈' : '📉';
+                    
+                    container.innerHTML = `
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                            <div>
+                                <div style="font-size: 14px; color: #888; margin-bottom: 8px;">${data.current.period}</div>
+                                <div style="font-size: 24px; font-weight: 700; color: #333;">¥${data.current.amount.toFixed(2)}</div>
+                                <div style="font-size: 12px; color: #999; margin-top: 5px;">${data.current.count} 条记录</div>
+                            </div>
+                            <div>
+                                <div style="font-size: 14px; color: #888; margin-bottom: 8px;">${data.last.period}</div>
+                                <div style="font-size: 24px; font-weight: 700; color: #333;">¥${data.last.amount.toFixed(2)}</div>
+                                <div style="font-size: 12px; color: #999; margin-top: 5px;">${data.last.count} 条记录</div>
+                            </div>
+                        </div>
+                        <div style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #f0f0f0;">
+                            <div style="font-size: 16px; font-weight: 600; ${changeClass}">
+                                ${changeIcon} ${change >= 0 ? '+' : ''}¥${Math.abs(change).toFixed(2)} (${change >= 0 ? '+' : ''}${changePercent.toFixed(1)}%)
+                            </div>
+                        </div>
+                    `;
+                }
+            } catch (e) {
+                console.error('加载对比分析失败:', e);
+            }
+        }
+        
+        // 备份数据
+        async function backupData() {
+            if (!confirm('确定要备份所有数据吗？')) {
+                return;
+            }
+            
+            const token = sessionStorage.getItem('admin_token');
+            try {
+                const response = await fetch('/api/admin/backup', {
+                    headers: {'Authorization': `Bearer ${token}`}
+                });
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const downloadUrl = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = downloadUrl;
+                    a.download = `backup_${new Date().getTime()}.xlsx`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(downloadUrl);
+                    alert('✅ 备份成功！');
+                } else {
+                    alert('❌ 备份失败，请检查登录状态');
+                }
+            } catch (e) {
+                alert('❌ 备份失败: ' + e.message);
+            }
+        }
 
         // 加载记录列表
+        let selectedRecords = new Set();
+        
         async function loadRecords(page = 1) {
             const token = sessionStorage.getItem('admin_token');
             const search = document.getElementById('searchInput').value;
             const dateFrom = document.getElementById('dateFrom').value;
             const dateTo = document.getElementById('dateTo').value;
+            const amountMin = document.getElementById('amountMin').value;
+            const amountMax = document.getElementById('amountMax').value;
+            const categoryFilter = Array.from(document.getElementById('categoryFilter').selectedOptions).map(o => o.value).filter(v => v);
             
             const params = new URLSearchParams({
                 page: page,
                 page_size: pageSize,
                 ...(search && {search}),
                 ...(dateFrom && {date_from: dateFrom}),
-                ...(dateTo && {date_to: dateTo})
+                ...(dateTo && {date_to: dateTo}),
+                ...(amountMin && {amount_min: amountMin}),
+                ...(amountMax && {amount_max: amountMax}),
+                ...(categoryFilter.length > 0 && {categories: categoryFilter.join(',')})
             });
             
             try {
@@ -1076,15 +1319,22 @@
                 });
                 const data = await response.json();
                 if (data.success) {
+                    // 加载分类列表（用于筛选）
+                    if (page === 1) {
+                        loadCategoriesForFilter();
+                    }
+                    
                     const tbody = document.getElementById('recordsTable');
                     if (data.records.length === 0) {
-                        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 40px; color: #999;">暂无记录</td></tr>';
+                        tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 40px; color: #999;">暂无记录</td></tr>';
                     } else {
                         tbody.innerHTML = data.records.map(r => {
-                            const desc = (r.description || '').replace(/'/g, "\\'");
-                            const cat = (r.category || '').replace(/'/g, "\\'");
+                            const desc = (r.description || '').replace(/'/g, "\\'").replace(/"/g, "&quot;");
+                            const cat = (r.category || '').replace(/'/g, "\\'").replace(/"/g, "&quot;");
+                            const isSelected = selectedRecords.has(r.id);
                             return `
                                 <tr>
+                                    <td><input type="checkbox" class="record-checkbox" value="${r.id}" ${isSelected ? 'checked' : ''} onchange="updateSelectedCount()"></td>
                                     <td>${r.id}</td>
                                     <td>${r.date}</td>
                                     <td>${r.time}</td>
@@ -1114,9 +1364,153 @@
                         }
                     }
                     currentPage = page;
+                    updateSelectedCount();
                 }
             } catch (e) {
                 console.error('加载记录失败:', e);
+            }
+        }
+        
+        // 加载分类列表用于筛选
+        async function loadCategoriesForFilter() {
+            const token = sessionStorage.getItem('admin_token');
+            try {
+                const response = await fetch('/api/admin/categories', {
+                    headers: {'Authorization': `Bearer ${token}`}
+                });
+                const data = await response.json();
+                if (data.success) {
+                    const select = document.getElementById('categoryFilter');
+                    const currentValue = Array.from(select.selectedOptions).map(o => o.value);
+                    select.innerHTML = '<option value="">全部分类</option>';
+                    data.categories.forEach(cat => {
+                        const option = document.createElement('option');
+                        option.value = cat;
+                        option.textContent = cat;
+                        if (currentValue.includes(cat)) {
+                            option.selected = true;
+                        }
+                        select.appendChild(option);
+                    });
+                }
+            } catch (e) {
+                console.error('加载分类列表失败:', e);
+            }
+        }
+        
+        // 全选/反选
+        function toggleSelectAll() {
+            const checkboxes = document.querySelectorAll('.record-checkbox');
+            const selectAll = document.getElementById('selectAllCheckbox');
+            const isChecked = selectAll.checked;
+            
+            checkboxes.forEach(cb => {
+                cb.checked = isChecked;
+                if (isChecked) {
+                    selectedRecords.add(parseInt(cb.value));
+                } else {
+                    selectedRecords.delete(parseInt(cb.value));
+                }
+            });
+            updateSelectedCount();
+        }
+        
+        // 更新选中数量
+        function updateSelectedCount() {
+            selectedRecords.clear();
+            document.querySelectorAll('.record-checkbox:checked').forEach(cb => {
+                selectedRecords.add(parseInt(cb.value));
+            });
+            const count = selectedRecords.size;
+            document.getElementById('selectedCount').textContent = count;
+            document.getElementById('batchDeleteBtn').disabled = count === 0;
+            
+            // 更新全选checkbox状态
+            const checkboxes = document.querySelectorAll('.record-checkbox');
+            const selectAll = document.getElementById('selectAllCheckbox');
+            if (checkboxes.length > 0) {
+                selectAll.checked = checkboxes.length === count && count > 0;
+            }
+        }
+        
+        // 批量删除
+        async function batchDelete() {
+            const ids = Array.from(selectedRecords);
+            if (ids.length === 0) {
+                alert('请先选择要删除的记录');
+                return;
+            }
+            
+            if (!confirm(`确定要删除选中的 ${ids.length} 条记录吗？此操作不可恢复！`)) {
+                return;
+            }
+            
+            const token = sessionStorage.getItem('admin_token');
+            try {
+                const response = await fetch('/api/admin/records/batch_delete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ids: ids})
+                });
+                const data = await response.json();
+                if (data.success) {
+                    alert(`✅ 成功删除 ${data.deleted_count} 条记录`);
+                    selectedRecords.clear();
+                    loadRecords(currentPage);
+                    loadOverview();
+                } else {
+                    alert('❌ 删除失败: ' + (data.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('❌ 删除失败: ' + e.message);
+            }
+        }
+        
+        // 重置筛选
+        function resetFilters() {
+            document.getElementById('searchInput').value = '';
+            document.getElementById('dateFrom').value = '';
+            document.getElementById('dateTo').value = '';
+            document.getElementById('amountMin').value = '';
+            document.getElementById('amountMax').value = '';
+            document.getElementById('categoryFilter').selectedIndex = 0;
+            loadRecords(1);
+        }
+        
+        // 导出记录
+        async function exportRecords() {
+            const dateFrom = document.getElementById('dateFrom').value;
+            const dateTo = document.getElementById('dateTo').value;
+            
+            let url = '/api/admin/export?period=custom';
+            if (dateFrom) url += `&date_from=${dateFrom}`;
+            if (dateTo) url += `&date_to=${dateTo}`;
+            if (!dateFrom && !dateTo) url = '/api/admin/export?period=all';
+            
+            const token = sessionStorage.getItem('admin_token');
+            const fullUrl = url + `&token=${encodeURIComponent(token)}`;
+            
+            // 使用fetch下载文件
+            try {
+                const response = await fetch(fullUrl);
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const downloadUrl = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = downloadUrl;
+                    a.download = `records_export_${new Date().getTime()}.xlsx`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(downloadUrl);
+                } else {
+                    alert('导出失败，请检查登录状态');
+                }
+            } catch (e) {
+                alert('导出失败: ' + e.message);
             }
         }
 
@@ -1209,6 +1603,12 @@
                         '#ff6b6b', '#4ecdc4', '#45b7d1', '#f9ca24',
                         '#6c5ce7', '#a29bfe', '#fd79a8', '#fdcb6e'
                     ];
+                    // 设置高DPI支持
+                    const dpr = window.devicePixelRatio || 1;
+                    ctx1.canvas.width = ctx1.canvas.offsetWidth * dpr;
+                    ctx1.canvas.height = ctx1.canvas.offsetHeight * dpr;
+                    ctx1.scale(dpr, dpr);
+                    
                     categoryChart = new Chart(ctx1, {
                         type: 'doughnut',
                         data: {
@@ -1223,14 +1623,15 @@
                         options: {
                             responsive: true,
                             maintainAspectRatio: false,
+                            devicePixelRatio: dpr * 2, // 提高清晰度
                             plugins: {
                                 legend: {
                                     position: 'right',
                                     labels: {
                                         padding: 15,
                                         font: {
-                                            size: 13,
-                                            weight: '500'
+                                            size: 14,
+                                            weight: '600'
                                         },
                                         usePointStyle: true,
                                         pointStyle: 'circle'
@@ -1246,10 +1647,10 @@
                                             return `${label}: ¥${value.toFixed(2)} (${percent}%)`;
                                         }
                                     },
-                                    backgroundColor: 'rgba(0,0,0,0.8)',
-                                    padding: 12,
-                                    titleFont: { size: 14, weight: '600' },
-                                    bodyFont: { size: 13 }
+                                    backgroundColor: 'rgba(0,0,0,0.9)',
+                                    padding: 14,
+                                    titleFont: { size: 15, weight: '700' },
+                                    bodyFont: { size: 14 }
                                 }
                             },
                             animation: {
@@ -1260,9 +1661,15 @@
                         }
                     });
 
-                    // 趋势图 - 更漂亮的样式
+                    // 趋势图 - 更漂亮的样式，高清晰度
                     if (trendChart) trendChart.destroy();
                     const ctx2 = document.getElementById('trendChart').getContext('2d');
+                    
+                    // 设置高DPI支持
+                    ctx2.canvas.width = ctx2.canvas.offsetWidth * dpr;
+                    ctx2.canvas.height = ctx2.canvas.offsetHeight * dpr;
+                    ctx2.scale(dpr, dpr);
+                    
                     trendChart = new Chart(ctx2, {
                         type: 'line',
                         data: {
@@ -1272,14 +1679,14 @@
                                 data: data.month_amounts || [],
                                 borderColor: '#667eea',
                                 backgroundColor: 'rgba(102, 126, 234, 0.1)',
-                                borderWidth: 3,
+                                borderWidth: 4,
                                 fill: true,
                                 tension: 0.4,
-                                pointRadius: 5,
-                                pointHoverRadius: 7,
+                                pointRadius: 6,
+                                pointHoverRadius: 8,
                                 pointBackgroundColor: '#667eea',
                                 pointBorderColor: '#fff',
-                                pointBorderWidth: 2,
+                                pointBorderWidth: 3,
                                 pointHoverBackgroundColor: '#764ba2',
                                 pointHoverBorderColor: '#fff'
                             }]
@@ -1287,15 +1694,16 @@
                         options: {
                             responsive: true,
                             maintainAspectRatio: false,
+                            devicePixelRatio: dpr * 2, // 提高清晰度
                             plugins: {
                                 legend: {
                                     display: false
                                 },
                                 tooltip: {
-                                    backgroundColor: 'rgba(0,0,0,0.8)',
-                                    padding: 12,
-                                    titleFont: { size: 14, weight: '600' },
-                                    bodyFont: { size: 13 },
+                                    backgroundColor: 'rgba(0,0,0,0.9)',
+                                    padding: 14,
+                                    titleFont: { size: 15, weight: '700' },
+                                    bodyFont: { size: 14 },
                                     callbacks: {
                                         label: function(context) {
                                             return '支出: ¥' + context.parsed.y.toFixed(2);
@@ -1310,15 +1718,16 @@
                                         callback: function(value) {
                                             return '¥' + value.toFixed(0);
                                         },
-                                        font: { size: 12 }
+                                        font: { size: 13, weight: '600' }
                                     },
                                     grid: {
-                                        color: 'rgba(0,0,0,0.05)'
+                                        color: 'rgba(0,0,0,0.08)',
+                                        lineWidth: 1
                                     }
                                 },
                                 x: {
                                     ticks: {
-                                        font: { size: 12 }
+                                        font: { size: 13, weight: '600' }
                                     },
                                     grid: {
                                         display: false
@@ -1489,7 +1898,6 @@
                     document.getElementById('tableStatsTitle').textContent = `${data.year}年所有月份`;
                     document.getElementById('backBtn').style.display = 'none';
                     document.getElementById('monthList').style.display = 'grid';
-                    document.getElementById('categoryStats').style.display = 'none';
                     document.getElementById('dayList').style.display = 'none';
                     document.getElementById('detailList').style.display = 'none';
                     
@@ -1511,6 +1919,9 @@
                         `;
                         monthList.appendChild(card);
                     }
+                    
+                    // 加载年份分类统计（放在下方）
+                    loadCategoryStats('year', data.year);
                 }
             } catch (e) {
                 console.error('加载月度统计失败:', e);
@@ -1537,9 +1948,6 @@
                     document.getElementById('dayList').style.display = 'grid';
                     document.getElementById('detailList').style.display = 'none';
                     
-                    // 加载分类统计（显示在日期列表上方）
-                    loadCategoryStats(year, month);
-                    
                     const dayList = document.getElementById('dayList');
                     dayList.innerHTML = '';
                     
@@ -1556,6 +1964,9 @@
                         `;
                         dayList.appendChild(card);
                     });
+                    
+                    // 加载月份分类统计（放在日期列表下方）
+                    loadCategoryStats('month', year, month);
                 }
             } catch (e) {
                 console.error('加载每日统计失败:', e);
@@ -1581,7 +1992,6 @@
                         `${dateObj.getFullYear()}年${monthNames[dateObj.getMonth()]}${dateObj.getDate()}日`;
                     document.getElementById('backBtn').style.display = 'block';
                     document.getElementById('monthList').style.display = 'none';
-                    document.getElementById('categoryStats').style.display = 'none';
                     document.getElementById('dayList').style.display = 'none';
                     document.getElementById('detailList').style.display = 'block';
                     
@@ -1612,6 +2022,9 @@
                             </tbody>
                         </table>
                     `;
+                    
+                    // 加载日期分类统计（放在明细列表下方）
+                    loadCategoryStats('date', dateStr);
                 }
             } catch (e) {
                 console.error('加载日期明细失败:', e);
@@ -1621,10 +2034,26 @@
 
         // 加载分类统计
         let showAllCategories = false;
-        async function loadCategoryStats(year, month) {
+        let currentCategoryType = ''; // year, month, date
+        
+        async function loadCategoryStats(type, ...args) {
             const token = sessionStorage.getItem('admin_token');
+            currentCategoryType = type;
             try {
-                const response = await fetch(`/api/admin/month_category_stats?year=${year}&month=${month}`, {
+                let url = '';
+                if (type === 'year') {
+                    const year = args[0];
+                    url = `/api/admin/year_category_stats?year=${year}`;
+                } else if (type === 'month') {
+                    const year = args[0];
+                    const month = args[1];
+                    url = `/api/admin/month_category_stats?year=${year}&month=${month}`;
+                } else if (type === 'date') {
+                    const date = args[0];
+                    url = `/api/admin/date_category_stats?date=${date}`;
+                }
+                
+                const response = await fetch(url, {
                     headers: {'Authorization': `Bearer ${token}`}
                 });
                 const data = await response.json();
@@ -1632,7 +2061,7 @@
                     showAllCategories = false;
                     const categoryStats = document.getElementById('categoryStats');
                     categoryStats.style.display = 'block';
-                    renderCategoryStats(data);
+                    renderCategoryStats(data, type, ...args);
                 }
             } catch (e) {
                 console.error('加载分类统计失败:', e);
@@ -1640,24 +2069,43 @@
         }
 
         // 渲染分类统计
-        function renderCategoryStats(data) {
+        function renderCategoryStats(data, type, ...args) {
             const categoryStats = document.getElementById('categoryStats');
-            const categoriesToShow = showAllCategories ? data.all : data.top10;
-            const hasMore = data.all.length > 10;
+            let categories = [];
+            let title = '';
+            let clickable = false;
+            
+            if (type === 'year') {
+                categories = showAllCategories ? data.categories : data.categories.slice(0, 10);
+                title = `${data.year}年分类支出统计`;
+                clickable = true;
+            } else if (type === 'month') {
+                categories = showAllCategories ? data.all : data.top10;
+                title = `${data.year}年${data.month}月分类支出统计`;
+                clickable = true;
+            } else if (type === 'date') {
+                categories = data.categories;
+                title = `${data.date} 分类支出统计`;
+                clickable = false;
+            }
+            
+            const hasMore = (type === 'year' ? data.categories.length : data.all.length) > 10;
             
             categoryStats.innerHTML = `
                 <h4>
-                    <span>分类支出统计</span>
-                    ${hasMore ? `<span class="toggle-btn" onclick="toggleCategoryStats(${data.year}, ${data.month})">
-                        ${showAllCategories ? '收起' : `查看全部 (${data.all.length}个分类)`}
-                    </span>` : ''}
+                    <span>${title}</span>
+                    ${hasMore && !showAllCategories ? `<span class="toggle-btn" onclick="toggleCategoryStats('${type}', ${args.map(a => typeof a === 'string' ? `'${a}'` : a).join(', ')})">
+                        查看全部 (${type === 'year' ? data.categories.length : data.all.length}个分类)
+                    </span>` : hasMore ? `<span class="toggle-btn" onclick="toggleCategoryStats('${type}', ${args.map(a => typeof a === 'string' ? `'${a}'` : a).join(', ')})">收起</span>` : ''}
                 </h4>
                 <div class="category-list">
-                    ${categoriesToShow.map((item, index) => {
+                    ${categories.map((item, index) => {
                         const rank = index + 1;
                         const rankClass = rank <= 3 ? 'top3' : '';
+                        const clickHandler = clickable ? `onclick="viewCategoryDetails('${item.category}', '${type}', ${args.map(a => typeof a === 'string' ? `'${a}'` : a).join(', ')})"` : '';
+                        const cursorStyle = clickable ? 'cursor: pointer;' : '';
                         return `
-                            <div class="category-item ${rankClass}">
+                            <div class="category-item ${rankClass}" ${clickHandler} style="${cursorStyle}">
                                 <div style="display: flex; align-items: center;">
                                     <span class="rank">${rank}</span>
                                     <span class="category-name">${item.category || '未分类'}</span>
@@ -1674,26 +2122,92 @@
         }
 
         // 切换显示全部/前10
-        function toggleCategoryStats(year, month) {
+        function toggleCategoryStats(type, ...args) {
             showAllCategories = !showAllCategories;
+            loadCategoryStats(type, ...args);
+        }
+
+        // 查看分类明细
+        function viewCategoryDetails(category, type, ...args) {
             const token = sessionStorage.getItem('admin_token');
-            fetch(`/api/admin/month_category_stats?year=${year}&month=${month}`, {
+            let url = `/api/admin/category_records?category=${encodeURIComponent(category)}`;
+            
+            if (type === 'year') {
+                url += `&year=${args[0]}`;
+            } else if (type === 'month') {
+                url += `&year=${args[0]}&month=${args[1]}`;
+            }
+            
+            fetch(url, {
                 headers: {'Authorization': `Bearer ${token}`}
             })
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
-                    renderCategoryStats(data);
+                    currentView = 'category_details';
+                    const categoryStats = document.getElementById('categoryStats');
+                    categoryStats.style.display = 'none';
+                    document.getElementById('monthList').style.display = 'none';
+                    document.getElementById('dayList').style.display = 'none';
+                    document.getElementById('detailList').style.display = 'block';
+                    
+                    let periodText = '';
+                    if (type === 'year') {
+                        periodText = `${args[0]}年`;
+                    } else if (type === 'month') {
+                        const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', 
+                                         '七月', '八月', '九月', '十月', '十一月', '十二月'];
+                        periodText = `${args[0]}年${monthNames[args[1] - 1]}`;
+                    }
+                    
+                    document.getElementById('tableStatsTitle').textContent = `${periodText} - ${category}`;
+                    document.getElementById('backBtn').style.display = 'block';
+                    
+                    const detailList = document.getElementById('detailList');
+                    detailList.innerHTML = `
+                        <div class="detail-header">
+                            <h4>${category} 明细记录</h4>
+                            <div class="total">总计: ¥${data.total.toFixed(2)} (${data.count}条)</div>
+                        </div>
+                        <table class="detail-table">
+                            <thead>
+                                <tr>
+                                    <th>日期</th>
+                                    <th>时间</th>
+                                    <th>描述</th>
+                                    <th>金额</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${data.records.map(r => `
+                                    <tr>
+                                        <td>${r.date}</td>
+                                        <td>${r.time}</td>
+                                        <td>${r.description || '-'}</td>
+                                        <td class="amount">¥${r.amount.toFixed(2)}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    `;
                 }
             })
             .catch(e => {
-                console.error('切换分类统计失败:', e);
+                console.error('加载分类明细失败:', e);
+                alert('❌ 加载分类明细失败: ' + e.message);
             });
         }
 
         // 返回上一级
         function goBack() {
-            if (currentView === 'details') {
+            if (currentView === 'category_details') {
+                // 从分类明细返回到上一级
+                if (currentCategoryType === 'month') {
+                    loadDailyStats(currentYear, currentMonth);
+                } else if (currentCategoryType === 'year') {
+                    loadMonthlyStats();
+                }
+            } else if (currentView === 'details') {
                 // 从明细返回到日期列表
                 loadDailyStats(currentYear, currentMonth);
             } else if (currentView === 'days') {

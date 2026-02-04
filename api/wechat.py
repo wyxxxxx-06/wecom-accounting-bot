@@ -2710,6 +2710,9 @@ async def admin_records(
         search = params.get("search", "")
         date_from = params.get("date_from", "")
         date_to = params.get("date_to", "")
+        amount_min = params.get("amount_min", "")
+        amount_max = params.get("amount_max", "")
+        categories = params.get("categories", "")
         
         # 获取所有记录
         start_date = None
@@ -2729,6 +2732,19 @@ async def admin_records(
                 if search_lower in r.get("description", "").lower() or
                    search_lower in r.get("category", "").lower()
             ]
+        
+        # 金额范围过滤
+        if amount_min:
+            min_amount = float(amount_min)
+            records = [r for r in records if float(r.get("amount", 0)) >= min_amount]
+        if amount_max:
+            max_amount = float(amount_max)
+            records = [r for r in records if float(r.get("amount", 0)) <= max_amount]
+        
+        # 分类过滤
+        if categories:
+            category_list = [c.strip() for c in categories.split(",") if c.strip()]
+            records = [r for r in records if r.get("category", "") in category_list]
         
         # 格式化
         formatted = []
@@ -3102,6 +3118,549 @@ async def admin_month_category_stats(
         }
     except Exception as e:
         print(f"月份分类统计错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/year_category_stats")
+async def admin_year_category_stats(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """获取指定年份的分类统计"""
+    try:
+        params = dict(request.query_params)
+        year = int(params.get("year", datetime.now(LOCAL_TZ).year))
+        
+        year_start = datetime(year, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+        year_end = datetime(year + 1, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+        
+        all_records = get_records()
+        year_records = filter_records_by_local_range(all_records, year_start, year_end)
+        
+        # 按分类统计
+        category_stats = {}
+        for r in year_records:
+            category = r.get("category", "未分类")
+            amount = float(r.get("amount", 0))
+            if category not in category_stats:
+                category_stats[category] = {"amount": 0, "count": 0}
+            category_stats[category]["amount"] += amount
+            category_stats[category]["count"] += 1
+        
+        # 转换为列表并按金额排序
+        category_list = [
+            {
+                "category": cat,
+                "amount": stats["amount"],
+                "count": stats["count"]
+            }
+            for cat, stats in category_stats.items()
+        ]
+        category_list.sort(key=lambda x: x["amount"], reverse=True)
+        
+        return {
+            "success": True,
+            "year": year,
+            "categories": category_list,
+            "total": sum(c["amount"] for c in category_list)
+        }
+    except Exception as e:
+        print(f"年份分类统计错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/date_category_stats")
+async def admin_date_category_stats(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """获取指定日期的分类统计"""
+    try:
+        params = dict(request.query_params)
+        date_str = params.get("date", "")
+        
+        if not date_str:
+            return {"success": False, "error": "缺少日期参数"}
+        
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=LOCAL_TZ)
+        date_start = date_obj
+        date_end = date_obj + timedelta(days=1)
+        
+        all_records = get_records()
+        date_records = filter_records_by_local_range(all_records, date_start, date_end)
+        
+        # 按分类统计
+        category_stats = {}
+        for r in date_records:
+            category = r.get("category", "未分类")
+            amount = float(r.get("amount", 0))
+            if category not in category_stats:
+                category_stats[category] = {"amount": 0, "count": 0}
+            category_stats[category]["amount"] += amount
+            category_stats[category]["count"] += 1
+        
+        # 转换为列表并按金额排序
+        category_list = [
+            {
+                "category": cat,
+                "amount": stats["amount"],
+                "count": stats["count"]
+            }
+            for cat, stats in category_stats.items()
+        ]
+        category_list.sort(key=lambda x: x["amount"], reverse=True)
+        
+        return {
+            "success": True,
+            "date": date_str,
+            "categories": category_list,
+            "total": sum(c["amount"] for c in category_list)
+        }
+    except Exception as e:
+        print(f"日期分类统计错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/category_records")
+async def admin_category_records(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """获取指定分类在指定时间范围内的明细记录"""
+    try:
+        params = dict(request.query_params)
+        category = params.get("category", "")
+        year = params.get("year", "")
+        month = params.get("month", "")
+        date = params.get("date", "")
+        
+        if not category:
+            return {"success": False, "error": "缺少分类参数"}
+        
+        all_records = get_records()
+        
+        # 根据时间范围筛选
+        if date:
+            # 单日
+            date_obj = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=LOCAL_TZ)
+            date_start = date_obj
+            date_end = date_obj + timedelta(days=1)
+            filtered = filter_records_by_local_range(all_records, date_start, date_end)
+        elif year and month:
+            # 单月
+            year_int = int(year)
+            month_int = int(month)
+            month_start = datetime(year_int, month_int, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            if month_int == 12:
+                month_end = datetime(year_int + 1, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            else:
+                month_end = datetime(year_int, month_int + 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            filtered = filter_records_by_local_range(all_records, month_start, month_end)
+        elif year:
+            # 全年
+            year_int = int(year)
+            year_start = datetime(year_int, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            year_end = datetime(year_int + 1, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            filtered = filter_records_by_local_range(all_records, year_start, year_end)
+        else:
+            filtered = all_records
+        
+        # 按分类筛选
+        category_records = [r for r in filtered if r.get("category", "") == category]
+        
+        # 格式化
+        formatted = []
+        for r in category_records:
+            dt = to_local_datetime(r["created_at"])
+            formatted.append({
+                "id": r["id"],
+                "date": dt.strftime("%Y-%m-%d"),
+                "time": dt.strftime("%H:%M"),
+                "description": r.get("description", ""),
+                "amount": float(r.get("amount", 0)),
+                "category": r.get("category", "")
+            })
+        
+        # 按日期和时间排序
+        formatted.sort(key=lambda x: (x["date"], x["time"]))
+        
+        return {
+            "success": True,
+            "category": category,
+            "records": formatted,
+            "total": sum(r["amount"] for r in formatted),
+            "count": len(formatted)
+        }
+    except Exception as e:
+        print(f"分类明细错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/admin/records/batch_delete")
+async def admin_batch_delete_records(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """批量删除记录"""
+    try:
+        data = await request.json()
+        record_ids = data.get("ids", [])
+        
+        if not record_ids:
+            return {"success": False, "error": "请选择要删除的记录"}
+        
+        deleted_count = 0
+        for record_id in record_ids:
+            result = delete_record(record_id)
+            if result.get("success"):
+                deleted_count += 1
+        
+        return {
+            "success": True,
+            "deleted_count": deleted_count,
+            "total": len(record_ids)
+        }
+    except Exception as e:
+        print(f"批量删除错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+def verify_admin_token_flexible(request: Request):
+    """验证管理员token（支持header和query参数）"""
+    try:
+        # 先尝试从header获取
+        auth_header = request.headers.get("Authorization", "")
+        token = None
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+        else:
+            # 从query参数获取
+            params = dict(request.query_params)
+            token = params.get("token", "")
+        
+        if not token:
+            raise HTTPException(status_code=401, detail="Missing token")
+        
+        payload = jwt.decode(token, ADMIN_SECRET, algorithms=["HS256"])
+        if payload.get("type") != "admin":
+            raise HTTPException(status_code=403, detail="Invalid token type")
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=403, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=403, detail="Invalid token")
+
+
+@app.get("/api/admin/export")
+async def admin_export(
+    request: Request,
+    payload: dict = Depends(verify_admin_token_flexible)
+):
+    """管理后台导出Excel"""
+    try:
+        params = dict(request.query_params)
+        period = params.get("period", "all")  # all, month, year, custom
+        year = params.get("year", "")
+        month = params.get("month", "")
+        date_from = params.get("date_from", "")
+        date_to = params.get("date_to", "")
+        
+        all_records = get_records()
+        
+        # 根据period筛选记录
+        if period == "all":
+            filtered = all_records
+        elif period == "month" and year and month:
+            year_int = int(year)
+            month_int = int(month)
+            month_start = datetime(year_int, month_int, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            if month_int == 12:
+                month_end = datetime(year_int + 1, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            else:
+                month_end = datetime(year_int, month_int + 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            filtered = filter_records_by_local_range(all_records, month_start, month_end)
+        elif period == "year" and year:
+            year_int = int(year)
+            year_start = datetime(year_int, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            year_end = datetime(year_int + 1, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            filtered = filter_records_by_local_range(all_records, year_start, year_end)
+        elif period == "custom" and date_from and date_to:
+            start_date = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=LOCAL_TZ)
+            end_date = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=LOCAL_TZ) + timedelta(days=1)
+            filtered = filter_records_by_local_range(all_records, start_date, end_date)
+        else:
+            filtered = all_records
+        
+        # 生成Excel
+        excel_bytes = build_export_excel_bytes(filtered)
+        
+        # 生成文件名
+        now = datetime.now(LOCAL_TZ)
+        if period == "month" and year and month:
+            filename = f"records_{year}{month:02d}_export.xlsx"
+        elif period == "year" and year:
+            filename = f"records_{year}_export.xlsx"
+        elif period == "custom":
+            filename = f"records_{date_from}_to_{date_to}_export.xlsx"
+        else:
+            filename = f"records_all_{now.strftime('%Y%m%d_%H%M%S')}_export.xlsx"
+        
+        return Response(
+            content=excel_bytes,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        print(f"导出错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/backup")
+async def admin_backup(
+    request: Request,
+    payload: dict = Depends(verify_admin_token_flexible)
+):
+    """数据备份（导出所有数据）"""
+    try:
+        all_records = get_records()
+        excel_bytes = build_export_excel_bytes(all_records)
+        
+        now = datetime.now(LOCAL_TZ)
+        filename = f"backup_{now.strftime('%Y%m%d_%H%M%S')}.xlsx"
+        
+        return Response(
+            content=excel_bytes,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        print(f"备份错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/comparison")
+async def admin_comparison(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """数据对比分析"""
+    try:
+        params = dict(request.query_params)
+        type = params.get("type", "month")  # month, year
+        
+        now = datetime.now(LOCAL_TZ)
+        all_records = get_records()
+        
+        if type == "month":
+            # 本月 vs 上月
+            current_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            if now.month == 1:
+                last_month_start = datetime(now.year - 1, 12, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+                last_month_end = current_month_start
+            else:
+                last_month_start = datetime(now.year, now.month - 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+                last_month_end = current_month_start
+            
+            current_records = filter_records_by_local_range(all_records, current_month_start, now + timedelta(days=1))
+            last_records = filter_records_by_local_range(all_records, last_month_start, last_month_end)
+            
+            current_amount = sum(float(r["amount"]) for r in current_records)
+            last_amount = sum(float(r["amount"]) for r in last_records)
+            
+            return {
+                "success": True,
+                "type": "month",
+                "current": {
+                    "period": f"{now.year}年{now.month}月",
+                    "amount": current_amount,
+                    "count": len(current_records)
+                },
+                "last": {
+                    "period": f"{last_month_start.year}年{last_month_start.month}月",
+                    "amount": last_amount,
+                    "count": len(last_records)
+                },
+                "change": current_amount - last_amount,
+                "change_percent": ((current_amount - last_amount) / last_amount * 100) if last_amount > 0 else 0
+            }
+        elif type == "year":
+            # 今年 vs 去年
+            current_year_start = datetime(now.year, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            last_year_start = datetime(now.year - 1, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            last_year_end = current_year_start
+            
+            current_records = filter_records_by_local_range(all_records, current_year_start, now + timedelta(days=1))
+            last_records = filter_records_by_local_range(all_records, last_year_start, last_year_end)
+            
+            current_amount = sum(float(r["amount"]) for r in current_records)
+            last_amount = sum(float(r["amount"]) for r in last_records)
+            
+            return {
+                "success": True,
+                "type": "year",
+                "current": {
+                    "period": f"{now.year}年",
+                    "amount": current_amount,
+                    "count": len(current_records)
+                },
+                "last": {
+                    "period": f"{now.year - 1}年",
+                    "amount": last_amount,
+                    "count": len(last_records)
+                },
+                "change": current_amount - last_amount,
+                "change_percent": ((current_amount - last_amount) / last_amount * 100) if last_amount > 0 else 0
+            }
+        else:
+            return {"success": False, "error": "不支持的对比类型"}
+    except Exception as e:
+        print(f"对比分析错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/weekly_stats")
+async def admin_weekly_stats(payload: dict = Depends(verify_admin_token)):
+    """周统计"""
+    try:
+        now = datetime.now(LOCAL_TZ)
+        # 本周一
+        days_since_monday = now.weekday()
+        week_start = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+        week_end = now + timedelta(days=1)
+        
+        all_records = get_records()
+        week_records = filter_records_by_local_range(all_records, week_start, week_end)
+        
+        # 按天统计
+        daily_stats = {}
+        for r in week_records:
+            dt = to_local_datetime(r["created_at"])
+            day_key = dt.strftime("%Y-%m-%d")
+            amount = float(r["amount"])
+            if day_key not in daily_stats:
+                daily_stats[day_key] = {"amount": 0, "count": 0, "date": day_key}
+            daily_stats[day_key]["amount"] += amount
+            daily_stats[day_key]["count"] += 1
+        
+        # 生成本周所有日期
+        days = []
+        current = week_start
+        while current < week_end:
+            day_key = current.strftime("%Y-%m-%d")
+            days.append({
+                "date": day_key,
+                "day": current.day,
+                "weekday": ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][current.weekday()],
+                "amount": daily_stats.get(day_key, {}).get("amount", 0),
+                "count": daily_stats.get(day_key, {}).get("count", 0)
+            })
+            current += timedelta(days=1)
+        
+        total_amount = sum(float(r["amount"]) for r in week_records)
+        avg_daily = total_amount / 7 if len(days) > 0 else 0
+        
+        return {
+            "success": True,
+            "week_start": week_start.strftime("%Y-%m-%d"),
+            "week_end": (week_end - timedelta(days=1)).strftime("%Y-%m-%d"),
+            "days": days,
+            "total_amount": total_amount,
+            "total_count": len(week_records),
+            "avg_daily": avg_daily
+        }
+    except Exception as e:
+        print(f"周统计错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/quarterly_stats")
+async def admin_quarterly_stats(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """季度统计"""
+    try:
+        params = dict(request.query_params)
+        year = int(params.get("year", datetime.now(LOCAL_TZ).year))
+        
+        quarters = []
+        for q in range(1, 5):
+            month_start = (q - 1) * 3 + 1
+            quarter_start = datetime(year, month_start, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            if q == 4:
+                quarter_end = datetime(year + 1, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            else:
+                quarter_end = datetime(year, month_start + 3, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            
+            all_records = get_records()
+            quarter_records = filter_records_by_local_range(all_records, quarter_start, quarter_end)
+            
+            quarters.append({
+                "quarter": q,
+                "period": f"Q{q}",
+                "amount": sum(float(r["amount"]) for r in quarter_records),
+                "count": len(quarter_records)
+            })
+        
+        return {
+            "success": True,
+            "year": year,
+            "quarters": quarters,
+            "total": sum(q["amount"] for q in quarters)
+        }
+    except Exception as e:
+        print(f"季度统计错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/avg_daily")
+async def admin_avg_daily(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """平均每日支出"""
+    try:
+        params = dict(request.query_params)
+        period = params.get("period", "month")  # month, year, all
+        
+        now = datetime.now(LOCAL_TZ)
+        all_records = get_records()
+        
+        if period == "month":
+            month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            filtered = filter_records_by_local_range(all_records, month_start, now + timedelta(days=1))
+            days = (now - month_start).days + 1
+        elif period == "year":
+            year_start = datetime(now.year, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            filtered = filter_records_by_local_range(all_records, year_start, now + timedelta(days=1))
+            days = (now - year_start).days + 1
+        else:
+            # all
+            if not all_records:
+                return {
+                    "success": True,
+                    "period": "all",
+                    "avg_daily": 0,
+                    "total_amount": 0,
+                    "days": 0
+                }
+            first_record = min(all_records, key=lambda r: to_local_datetime(r["created_at"]))
+            first_date = to_local_datetime(first_record["created_at"]).replace(hour=0, minute=0, second=0, microsecond=0)
+            filtered = all_records
+            days = (now - first_date).days + 1
+        
+        total_amount = sum(float(r["amount"]) for r in filtered)
+        avg_daily = total_amount / days if days > 0 else 0
+        
+        return {
+            "success": True,
+            "period": period,
+            "avg_daily": avg_daily,
+            "total_amount": total_amount,
+            "days": days
+        }
+    except Exception as e:
+        print(f"平均每日支出错误: {str(e)[:100]}")
         return {"success": False, "error": str(e)}
 
 
