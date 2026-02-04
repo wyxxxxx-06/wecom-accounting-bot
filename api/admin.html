@@ -13,7 +13,8 @@
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background: #f5f7fa;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            min-height: 100vh;
         }
         .login-container {
             min-height: 100vh;
@@ -21,61 +22,95 @@
             align-items: center;
             justify-content: center;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            position: relative;
+            overflow: hidden;
+        }
+        .login-container::before {
+            content: '';
+            position: absolute;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.1) 1px, transparent 1px);
+            background-size: 50px 50px;
+            animation: float 20s infinite linear;
+        }
+        @keyframes float {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(-50px, -50px); }
         }
         .login-box {
             background: white;
-            padding: 40px;
-            border-radius: 16px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 50px 40px;
+            border-radius: 20px;
+            box-shadow: 0 25px 80px rgba(0,0,0,0.3);
             width: 100%;
-            max-width: 400px;
+            max-width: 420px;
+            position: relative;
+            z-index: 1;
+            animation: slideUp 0.5s ease-out;
+        }
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(30px); }
+            to { opacity: 1; transform: translateY(0); }
         }
         .login-box h1 {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 35px;
             color: #333;
+            font-size: 28px;
+            font-weight: 700;
         }
         .form-group {
-            margin-bottom: 20px;
+            margin-bottom: 25px;
         }
         .form-group label {
             display: block;
-            margin-bottom: 8px;
-            color: #666;
-            font-weight: 500;
+            margin-bottom: 10px;
+            color: #555;
+            font-weight: 600;
+            font-size: 14px;
         }
         .form-group input {
             width: 100%;
-            padding: 12px;
+            padding: 14px 16px;
             border: 2px solid #e0e0e0;
-            border-radius: 8px;
+            border-radius: 10px;
             font-size: 16px;
-            transition: border-color 0.3s;
+            transition: all 0.3s;
         }
         .form-group input:focus {
             outline: none;
             border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
         }
         .btn {
             width: 100%;
-            padding: 14px;
+            padding: 16px;
             border: none;
-            border-radius: 8px;
+            border-radius: 10px;
             font-size: 16px;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
         }
         .btn:hover {
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
+        .btn:active {
+            transform: translateY(0);
         }
         .error {
             color: #e74c3c;
-            margin-top: 10px;
+            margin-top: 15px;
             text-align: center;
+            font-size: 14px;
+            padding: 10px;
+            background: #fee;
+            border-radius: 6px;
         }
         .main-container {
             display: none;
@@ -84,164 +119,381 @@
             display: block;
         }
         .header {
-            background: white;
-            padding: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 25px 30px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
             display: flex;
             justify-content: space-between;
             align-items: center;
+            color: white;
         }
         .header h1 {
-            color: #333;
+            color: white;
+            font-size: 24px;
+            font-weight: 700;
+        }
+        .header .btn {
+            width: auto;
+            padding: 10px 24px;
+            background: rgba(255,255,255,0.2);
+            backdrop-filter: blur(10px);
+        }
+        .header .btn:hover {
+            background: rgba(255,255,255,0.3);
         }
         .nav {
             background: white;
-            padding: 15px 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 20px 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
             display: flex;
-            gap: 15px;
+            gap: 12px;
             flex-wrap: wrap;
+            border-bottom: 1px solid #e0e0e0;
         }
         .nav-btn {
-            padding: 10px 20px;
+            padding: 12px 24px;
             border: none;
-            border-radius: 6px;
-            background: #f0f0f0;
-            color: #333;
+            border-radius: 8px;
+            background: #f5f7fa;
+            color: #666;
             cursor: pointer;
             transition: all 0.3s;
             font-size: 14px;
+            font-weight: 500;
+            position: relative;
         }
         .nav-btn.active {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
         }
-        .nav-btn:hover {
+        .nav-btn:hover:not(.active) {
+            background: #e8ecf1;
             transform: translateY(-2px);
         }
         .content {
-            padding: 20px;
+            padding: 30px;
             max-width: 1400px;
             margin: 0 auto;
         }
         .section {
             display: none;
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
         }
         .section.active {
             display: block;
         }
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 25px;
+            margin-bottom: 40px;
         }
         .stat-card {
             background: white;
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            padding: 30px;
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 4px;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        }
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.12);
         }
         .stat-card h3 {
-            color: #666;
-            font-size: 14px;
-            margin-bottom: 10px;
+            color: #888;
+            font-size: 13px;
+            margin-bottom: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         .stat-card .value {
-            font-size: 32px;
-            font-weight: bold;
+            font-size: 36px;
+            font-weight: 700;
             color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
         .table-container {
             background: white;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
             overflow: hidden;
         }
         .table-header {
-            padding: 20px;
+            padding: 25px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 1px solid #e0e0e0;
+            border-bottom: 2px solid #f0f0f0;
+            background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
         }
         .search-box {
             display: flex;
-            gap: 10px;
+            gap: 12px;
+            flex-wrap: wrap;
         }
         .search-box input {
-            padding: 8px 12px;
+            padding: 10px 14px;
             border: 2px solid #e0e0e0;
-            border-radius: 6px;
+            border-radius: 8px;
             font-size: 14px;
+            transition: all 0.3s;
+        }
+        .search-box input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
         }
         table {
             width: 100%;
             border-collapse: collapse;
         }
         th, td {
-            padding: 12px;
+            padding: 16px;
             text-align: left;
-            border-bottom: 1px solid #e0e0e0;
+            border-bottom: 1px solid #f0f0f0;
         }
         th {
             background: #f8f9fa;
             font-weight: 600;
-            color: #666;
+            color: #555;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         tr:hover {
-            background: #f8f9fa;
+            background: #f8f9ff;
         }
         .editable {
             cursor: pointer;
-            padding: 4px 8px;
-            border-radius: 4px;
-            transition: background 0.2s;
+            padding: 6px 10px;
+            border-radius: 6px;
+            transition: all 0.2s;
         }
         .editable:hover {
             background: #e3f2fd;
+            color: #667eea;
         }
         .pagination {
-            padding: 20px;
+            padding: 25px;
             display: flex;
             justify-content: center;
-            gap: 10px;
+            gap: 8px;
+            background: #f8f9fa;
         }
         .pagination button {
-            padding: 8px 12px;
-            border: 1px solid #e0e0e0;
+            padding: 10px 16px;
+            border: 2px solid #e0e0e0;
             background: white;
-            border-radius: 6px;
+            border-radius: 8px;
             cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 500;
+        }
+        .pagination button:hover {
+            border-color: #667eea;
+            color: #667eea;
         }
         .pagination button.active {
-            background: #667eea;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            border-color: #667eea;
+            border-color: transparent;
         }
         .chart-container {
             background: white;
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
+            padding: 30px;
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            margin-bottom: 25px;
+            position: relative;
+            overflow: hidden;
+        }
+        .chart-container::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 4px;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
         }
         .chart-container h3 {
-            margin-bottom: 20px;
+            margin-bottom: 25px;
             color: #333;
+            font-size: 20px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .chart-container h3::before {
+            content: '📊';
+            font-size: 24px;
+        }
+        .chart-wrapper {
+            position: relative;
+            height: 400px;
+            margin-top: 20px;
+        }
+        .upload-section {
+            background: white;
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
         }
         .upload-area {
-            border: 2px dashed #667eea;
-            border-radius: 12px;
-            padding: 40px;
+            border: 3px dashed #667eea;
+            border-radius: 16px;
+            padding: 60px 40px;
             text-align: center;
             cursor: pointer;
             transition: all 0.3s;
-            margin-bottom: 20px;
+            margin-bottom: 30px;
+            background: linear-gradient(135deg, #f8f9ff 0%, #ffffff 100%);
+            position: relative;
+            overflow: hidden;
+        }
+        .upload-area::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(102, 126, 234, 0.1) 1px, transparent 1px);
+            background-size: 30px 30px;
+            animation: float 15s infinite linear;
         }
         .upload-area:hover {
             border-color: #764ba2;
-            background: #f8f9ff;
+            background: linear-gradient(135deg, #f0f2ff 0%, #f8f9ff 100%);
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.2);
+        }
+        .upload-area.dragover {
+            border-color: #764ba2;
+            background: linear-gradient(135deg, #e8ecff 0%, #f0f2ff 100%);
+            transform: scale(1.02);
+        }
+        .upload-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+            position: relative;
+            z-index: 1;
+        }
+        .upload-text {
+            color: #555;
+            margin-bottom: 8px;
+            font-size: 16px;
+            font-weight: 500;
+            position: relative;
+            z-index: 1;
+        }
+        .upload-hint {
+            font-size: 13px;
+            color: #999;
+            margin-top: 8px;
+            position: relative;
+            z-index: 1;
+        }
+        .file-name {
+            color: #667eea;
+            font-weight: 600;
+            margin-top: 15px;
+            word-break: break-all;
+            position: relative;
+            z-index: 1;
+        }
+        .guide-box {
+            background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+            border: 2px solid #ffc107;
+            border-radius: 12px;
+            padding: 25px;
+            margin-top: 30px;
+        }
+        .guide-box h4 {
+            color: #856404;
+            margin-bottom: 15px;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .guide-box h4::before {
+            content: '📖';
+            font-size: 24px;
+        }
+        .guide-steps {
+            list-style: none;
+            counter-reset: step-counter;
+        }
+        .guide-steps li {
+            counter-increment: step-counter;
+            margin-bottom: 15px;
+            padding-left: 35px;
+            position: relative;
+            color: #856404;
+            line-height: 1.6;
+        }
+        .guide-steps li::before {
+            content: counter(step-counter);
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 24px;
+            height: 24px;
+            background: #ffc107;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 12px;
+        }
+        .guide-steps li strong {
+            color: #664d03;
+            font-weight: 700;
+        }
+        .tips-box {
+            background: linear-gradient(135deg, #d1ecf1 0%, #bee5eb 100%);
+            border: 2px solid #17a2b8;
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        .tips-box h5 {
+            color: #0c5460;
+            margin-bottom: 10px;
+            font-size: 14px;
+            font-weight: 700;
+        }
+        .tips-box ul {
+            margin-left: 20px;
+            color: #0c5460;
+        }
+        .tips-box li {
+            margin-bottom: 5px;
+            font-size: 13px;
         }
         .modal {
             display: none;
@@ -250,38 +502,70 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0,0,0,0.5);
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(5px);
             z-index: 1000;
             align-items: center;
             justify-content: center;
+            animation: fadeIn 0.3s;
         }
         .modal.active {
             display: flex;
         }
         .modal-content {
             background: white;
-            padding: 30px;
-            border-radius: 12px;
-            max-width: 500px;
+            padding: 35px;
+            border-radius: 16px;
+            max-width: 550px;
             width: 90%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            animation: slideUp 0.3s;
         }
         .modal-content h2 {
-            margin-bottom: 20px;
+            margin-bottom: 25px;
+            color: #333;
+            font-size: 24px;
         }
         .modal-content input, .modal-content select {
             width: 100%;
-            padding: 10px;
-            margin-bottom: 15px;
+            padding: 12px 16px;
+            margin-bottom: 18px;
             border: 2px solid #e0e0e0;
-            border-radius: 6px;
+            border-radius: 8px;
+            font-size: 15px;
+            transition: all 0.3s;
+        }
+        .modal-content input:focus, .modal-content select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
         }
         .btn-group {
             display: flex;
-            gap: 10px;
-            margin-top: 20px;
+            gap: 12px;
+            margin-top: 25px;
         }
         .btn-secondary {
             background: #6c757d;
+        }
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        #uploadResult {
+            margin-top: 25px;
+            padding: 15px;
+            border-radius: 10px;
+            font-weight: 500;
+        }
+        .success-message {
+            background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+            color: #155724;
+            border: 2px solid #28a745;
+        }
+        .error-message {
+            background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
+            color: #721c24;
+            border: 2px solid #dc3545;
         }
     </style>
 </head>
@@ -293,7 +577,7 @@
             <form id="loginForm">
                 <div class="form-group">
                     <label>密码</label>
-                    <input type="password" id="password" required>
+                    <input type="password" id="password" required autocomplete="current-password">
                 </div>
                 <button type="submit" class="btn">登录</button>
                 <div class="error" id="loginError"></div>
@@ -305,14 +589,14 @@
     <div class="main-container" id="mainPage">
         <div class="header">
             <h1>📊 记账管理后台</h1>
-            <button class="btn" onclick="logout()" style="width: auto; padding: 10px 20px;">退出登录</button>
+            <button class="btn" onclick="logout()">退出登录</button>
         </div>
         <div class="nav">
-            <button class="nav-btn active" onclick="showSection('overview')">数据概览</button>
-            <button class="nav-btn" onclick="showSection('records')">记录列表</button>
-            <button class="nav-btn" onclick="showSection('stats')">图形统计</button>
-            <button class="nav-btn" onclick="showSection('import')">批量导入</button>
-            <button class="nav-btn" onclick="showSection('categories')">分类管理</button>
+            <button class="nav-btn active" onclick="showSection('overview')">📈 数据概览</button>
+            <button class="nav-btn" onclick="showSection('records')">📝 记录列表</button>
+            <button class="nav-btn" onclick="showSection('stats')">📊 图形统计</button>
+            <button class="nav-btn" onclick="showSection('import')">📤 批量导入</button>
+            <button class="nav-btn" onclick="showSection('categories')">🏷️ 分类管理</button>
         </div>
         <div class="content">
             <!-- 数据概览 -->
@@ -342,10 +626,10 @@
                 <div class="table-container">
                     <div class="table-header">
                         <div class="search-box">
-                            <input type="text" id="searchInput" placeholder="搜索描述或分类...">
+                            <input type="text" id="searchInput" placeholder="🔍 搜索描述或分类...">
                             <input type="date" id="dateFrom" placeholder="开始日期">
                             <input type="date" id="dateTo" placeholder="结束日期">
-                            <button class="btn" onclick="loadRecords()" style="width: auto; padding: 8px 20px;">查询</button>
+                            <button class="btn" onclick="loadRecords()" style="width: auto; padding: 10px 24px;">查询</button>
                         </div>
                     </div>
                     <table>
@@ -371,32 +655,70 @@
             <div class="section" id="stats">
                 <div class="chart-container">
                     <h3>分类支出占比</h3>
-                    <canvas id="categoryChart"></canvas>
+                    <div class="chart-wrapper">
+                        <canvas id="categoryChart"></canvas>
+                    </div>
                 </div>
                 <div class="chart-container">
                     <h3>月度支出趋势</h3>
-                    <canvas id="trendChart"></canvas>
+                    <div class="chart-wrapper">
+                        <canvas id="trendChart"></canvas>
+                    </div>
                 </div>
             </div>
 
             <!-- 批量导入 -->
             <div class="section" id="import">
-                <div class="upload-area" onclick="document.getElementById('fileInput').click()">
-                    <div style="font-size: 48px; margin-bottom: 10px;">📁</div>
-                    <div>点击选择文件或拖拽到此处</div>
-                    <div style="font-size: 12px; color: #999; margin-top: 5px;">支持 .xlsx 格式</div>
+                <div class="upload-section">
+                    <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
+                        <div class="upload-icon">📁</div>
+                        <div class="upload-text">点击选择文件或拖拽到此处</div>
+                        <div class="upload-hint">支持 .xlsx 格式的 Excel 文件</div>
+                        <div class="file-name" id="fileName"></div>
+                    </div>
+                    <input type="file" id="fileInput" accept=".xlsx" style="display: none;" onchange="handleFileSelect(event)">
+                    <button class="btn" onclick="document.getElementById('fileInput').click()" style="width: 100%;">选择文件</button>
+                    
+                    <div class="guide-box">
+                        <h4>使用说明</h4>
+                        <ol class="guide-steps">
+                            <li><strong>导出数据</strong>：在微信发送「导出 本月」或「导出 全部」获取 Excel 文件</li>
+                            <li><strong>修改数据</strong>：打开 Excel 的「明细」表，可以修改以下字段：
+                                <ul style="margin-top: 8px; margin-left: 20px;">
+                                    <li>日期（格式：2026-01-15）</li>
+                                    <li>时间（格式：14:30）</li>
+                                    <li>描述（修改错别字或内容）</li>
+                                    <li>金额（修正金额）</li>
+                                    <li>分类（可以改成已有分类，也可以输入新分类名）</li>
+                                </ul>
+                            </li>
+                            <li><strong>上传文件</strong>：修改完成后，点击上方按钮选择文件或拖拽文件到上传区域</li>
+                            <li><strong>自动更新</strong>：系统会按 ID 批量更新所有记录，完成后会显示更新结果</li>
+                        </ol>
+                    </div>
+                    
+                    <div class="tips-box">
+                        <h5>⚠️ 注意事项</h5>
+                        <ul>
+                            <li>不要删除或修改 ID 列，否则无法匹配记录</li>
+                            <li>不能新增或删除记录行，只能修改现有记录</li>
+                            <li>日期格式必须为：YYYY-MM-DD（如：2026-01-15）</li>
+                            <li>时间格式必须为：HH:MM（如：14:30）</li>
+                            <li>金额必须是数字，支持小数（如：35.50）</li>
+                            <li>分类可以输入新名称，系统会自动创建新分类</li>
+                        </ul>
+                    </div>
+                    
+                    <div id="uploadResult"></div>
                 </div>
-                <input type="file" id="fileInput" accept=".xlsx" style="display: none;" onchange="handleFileUpload(event)">
-                <button class="btn" onclick="document.getElementById('fileInput').click()">选择文件</button>
-                <div id="uploadResult" style="margin-top: 20px;"></div>
             </div>
 
             <!-- 分类管理 -->
             <div class="section" id="categories">
                 <div class="table-container">
                     <div class="table-header">
-                        <h3>分类列表</h3>
-                        <button class="btn" onclick="showAddCategoryModal()" style="width: auto; padding: 8px 20px;">新增分类</button>
+                        <h3 style="margin: 0; color: #333; font-size: 18px;">分类列表</h3>
+                        <button class="btn" onclick="showAddCategoryModal()" style="width: auto; padding: 10px 24px;">新增分类</button>
                     </div>
                     <table>
                         <thead>
@@ -416,15 +738,15 @@
     </div>
 
     <!-- 编辑记录模态框 -->
-    <div class="modal" id="editModal">
+    <div class="modal" id="editModal" onclick="if(event.target===this) closeEditModal()">
         <div class="modal-content">
-            <h2>编辑记录</h2>
+            <h2>✏️ 编辑记录</h2>
             <input type="hidden" id="editId">
-            <input type="date" id="editDate" placeholder="日期">
-            <input type="time" id="editTime" placeholder="时间">
-            <input type="text" id="editDescription" placeholder="描述">
-            <input type="number" step="0.01" id="editAmount" placeholder="金额">
-            <input type="text" id="editCategory" placeholder="分类">
+            <input type="date" id="editDate" placeholder="日期" required>
+            <input type="time" id="editTime" placeholder="时间" required>
+            <input type="text" id="editDescription" placeholder="描述" required>
+            <input type="number" step="0.01" id="editAmount" placeholder="金额" required>
+            <input type="text" id="editCategory" placeholder="分类" required>
             <div class="btn-group">
                 <button class="btn" onclick="saveRecord()">保存</button>
                 <button class="btn btn-secondary" onclick="closeEditModal()">取消</button>
@@ -452,6 +774,9 @@
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const password = document.getElementById('password').value;
+            const errorDiv = document.getElementById('loginError');
+            errorDiv.textContent = '';
+            
             const response = await fetch('/api/admin/login', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -464,15 +789,18 @@
                 document.getElementById('mainPage').classList.add('active');
                 loadOverview();
             } else {
-                document.getElementById('loginError').textContent = data.error || '密码错误';
+                errorDiv.textContent = data.error || '密码错误';
             }
         });
 
         // 退出登录
         function logout() {
-            sessionStorage.removeItem('admin_token');
-            document.getElementById('loginPage').style.display = 'flex';
-            document.getElementById('mainPage').classList.remove('active');
+            if (confirm('确定要退出登录吗？')) {
+                sessionStorage.removeItem('admin_token');
+                document.getElementById('loginPage').style.display = 'flex';
+                document.getElementById('mainPage').classList.remove('active');
+                document.getElementById('password').value = '';
+            }
         }
 
         // 切换页面
@@ -491,15 +819,19 @@
         // 加载概览
         async function loadOverview() {
             const token = sessionStorage.getItem('admin_token');
-            const response = await fetch('/api/admin/overview', {
-                headers: {'Authorization': `Bearer ${token}`}
-            });
-            const data = await response.json();
-            if (data.success) {
-                document.getElementById('totalCount').textContent = data.total_count || 0;
-                document.getElementById('totalAmount').textContent = (data.total_amount || 0).toFixed(2) + ' 元';
-                document.getElementById('monthAmount').textContent = (data.month_amount || 0).toFixed(2) + ' 元';
-                document.getElementById('categoryCount').textContent = data.category_count || 0;
+            try {
+                const response = await fetch('/api/admin/overview', {
+                    headers: {'Authorization': `Bearer ${token}`}
+                });
+                const data = await response.json();
+                if (data.success) {
+                    document.getElementById('totalCount').textContent = (data.total_count || 0).toLocaleString();
+                    document.getElementById('totalAmount').textContent = (data.total_amount || 0).toFixed(2) + ' 元';
+                    document.getElementById('monthAmount').textContent = (data.month_amount || 0).toFixed(2) + ' 元';
+                    document.getElementById('categoryCount').textContent = data.category_count || 0;
+                }
+            } catch (e) {
+                console.error('加载概览失败:', e);
             }
         }
 
@@ -518,39 +850,53 @@
                 ...(dateTo && {date_to: dateTo})
             });
             
-            const response = await fetch(`/api/admin/records?${params}`, {
-                headers: {'Authorization': `Bearer ${token}`}
-            });
-            const data = await response.json();
-            if (data.success) {
-                const tbody = document.getElementById('recordsTable');
-                tbody.innerHTML = data.records.map(r => `
-                    <tr>
-                        <td>${r.id}</td>
-                        <td>${r.date}</td>
-                        <td>${r.time}</td>
-                        <td class="editable" onclick="editRecord(${r.id}, '${r.date}', '${r.time}', '${r.description}', ${r.amount}, '${r.category}')">${r.description}</td>
-                        <td>${r.amount.toFixed(2)}</td>
-                        <td class="editable" onclick="editRecord(${r.id}, '${r.date}', '${r.time}', '${r.description}', ${r.amount}, '${r.category}')">${r.category}</td>
-                        <td>
-                            <button class="btn" style="width: auto; padding: 5px 10px; font-size: 12px;" onclick="editRecord(${r.id}, '${r.date}', '${r.time}', '${r.description}', ${r.amount}, '${r.category}')">编辑</button>
-                            <button class="btn btn-secondary" style="width: auto; padding: 5px 10px; font-size: 12px;" onclick="deleteRecord(${r.id})">删除</button>
-                        </td>
-                    </tr>
-                `).join('');
-                
-                // 分页
-                const totalPages = Math.ceil(data.total / pageSize);
-                const pagination = document.getElementById('pagination');
-                pagination.innerHTML = '';
-                for (let i = 1; i <= totalPages; i++) {
-                    const btn = document.createElement('button');
-                    btn.textContent = i;
-                    btn.classList.toggle('active', i === page);
-                    btn.onclick = () => loadRecords(i);
-                    pagination.appendChild(btn);
+            try {
+                const response = await fetch(`/api/admin/records?${params}`, {
+                    headers: {'Authorization': `Bearer ${token}`}
+                });
+                const data = await response.json();
+                if (data.success) {
+                    const tbody = document.getElementById('recordsTable');
+                    if (data.records.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 40px; color: #999;">暂无记录</td></tr>';
+                    } else {
+                        tbody.innerHTML = data.records.map(r => {
+                            const desc = (r.description || '').replace(/'/g, "\\'");
+                            const cat = (r.category || '').replace(/'/g, "\\'");
+                            return `
+                                <tr>
+                                    <td>${r.id}</td>
+                                    <td>${r.date}</td>
+                                    <td>${r.time}</td>
+                                    <td class="editable" onclick="editRecord(${r.id}, '${r.date}', '${r.time}', '${desc}', ${r.amount}, '${cat}')">${r.description}</td>
+                                    <td style="font-weight: 600; color: #e74c3c;">¥${r.amount.toFixed(2)}</td>
+                                    <td class="editable" onclick="editRecord(${r.id}, '${r.date}', '${r.time}', '${desc}', ${r.amount}, '${cat}')">${r.category}</td>
+                                    <td>
+                                        <button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px; margin-right: 5px;" onclick="editRecord(${r.id}, '${r.date}', '${r.time}', '${desc}', ${r.amount}, '${cat}')">编辑</button>
+                                        <button class="btn btn-secondary" style="width: auto; padding: 6px 14px; font-size: 12px;" onclick="deleteRecord(${r.id})">删除</button>
+                                    </td>
+                                </tr>
+                            `;
+                        }).join('');
+                    }
+                    
+                    // 分页
+                    const totalPages = Math.ceil(data.total / pageSize);
+                    const pagination = document.getElementById('pagination');
+                    pagination.innerHTML = '';
+                    if (totalPages > 1) {
+                        for (let i = 1; i <= totalPages; i++) {
+                            const btn = document.createElement('button');
+                            btn.textContent = i;
+                            btn.classList.toggle('active', i === page);
+                            btn.onclick = () => loadRecords(i);
+                            pagination.appendChild(btn);
+                        }
+                    }
+                    currentPage = page;
                 }
-                currentPage = page;
+            } catch (e) {
+                console.error('加载记录失败:', e);
             }
         }
 
@@ -580,89 +926,202 @@
                 category: document.getElementById('editCategory').value
             };
             
-            const response = await fetch(`/api/admin/records/${id}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify(data)
-            });
-            
-            const result = await response.json();
-            if (result.success) {
-                closeEditModal();
-                loadRecords(currentPage);
-                loadOverview();
-            } else {
-                alert(result.error || '保存失败');
+            try {
+                const response = await fetch(`/api/admin/records/${id}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    closeEditModal();
+                    loadRecords(currentPage);
+                    loadOverview();
+                    if (categoryChart) loadStats();
+                } else {
+                    alert(result.error || '保存失败');
+                }
+            } catch (e) {
+                alert('保存失败: ' + e.message);
             }
         }
 
         async function deleteRecord(id) {
-            if (!confirm('确定要删除这条记录吗？')) return;
+            if (!confirm('确定要删除这条记录吗？此操作不可恢复！')) return;
             const token = sessionStorage.getItem('admin_token');
-            const response = await fetch(`/api/admin/records/${id}`, {
-                method: 'DELETE',
-                headers: {'Authorization': `Bearer ${token}`}
-            });
-            const result = await response.json();
-            if (result.success) {
-                loadRecords(currentPage);
-                loadOverview();
-            } else {
-                alert(result.error || '删除失败');
+            try {
+                const response = await fetch(`/api/admin/records/${id}`, {
+                    method: 'DELETE',
+                    headers: {'Authorization': `Bearer ${token}`}
+                });
+                const result = await response.json();
+                if (result.success) {
+                    loadRecords(currentPage);
+                    loadOverview();
+                    if (categoryChart) loadStats();
+                } else {
+                    alert(result.error || '删除失败');
+                }
+            } catch (e) {
+                alert('删除失败: ' + e.message);
             }
         }
 
         // 加载统计
         async function loadStats() {
             const token = sessionStorage.getItem('admin_token');
-            const response = await fetch('/api/admin/stats', {
-                headers: {'Authorization': `Bearer ${token}`}
-            });
-            const data = await response.json();
-            if (data.success) {
-                // 分类占比图
-                if (categoryChart) categoryChart.destroy();
-                const ctx1 = document.getElementById('categoryChart').getContext('2d');
-                categoryChart = new Chart(ctx1, {
-                    type: 'pie',
-                    data: {
-                        labels: data.category_labels || [],
-                        datasets: [{
-                            data: data.category_amounts || [],
-                            backgroundColor: [
-                                '#667eea', '#764ba2', '#f093fb', '#4facfe',
-                                '#43e97b', '#fa709a', '#fee140', '#30cfd0'
-                            ]
-                        }]
-                    }
+            try {
+                const response = await fetch('/api/admin/stats', {
+                    headers: {'Authorization': `Bearer ${token}`}
                 });
-
-                // 趋势图
-                if (trendChart) trendChart.destroy();
-                const ctx2 = document.getElementById('trendChart').getContext('2d');
-                trendChart = new Chart(ctx2, {
-                    type: 'line',
-                    data: {
-                        labels: data.month_labels || [],
-                        datasets: [{
-                            label: '月度支出',
-                            data: data.month_amounts || [],
-                            borderColor: '#667eea',
-                            backgroundColor: 'rgba(102, 126, 234, 0.1)',
-                            tension: 0.4
-                        }]
-                    },
-                    options: {
-                        scales: {
-                            y: {
-                                beginAtZero: true
+                const data = await response.json();
+                if (data.success) {
+                    // 分类占比图 - 更漂亮的样式
+                    if (categoryChart) categoryChart.destroy();
+                    const ctx1 = document.getElementById('categoryChart').getContext('2d');
+                    const colors = [
+                        '#667eea', '#764ba2', '#f093fb', '#4facfe',
+                        '#43e97b', '#fa709a', '#fee140', '#30cfd0',
+                        '#ff6b6b', '#4ecdc4', '#45b7d1', '#f9ca24',
+                        '#6c5ce7', '#a29bfe', '#fd79a8', '#fdcb6e'
+                    ];
+                    categoryChart = new Chart(ctx1, {
+                        type: 'doughnut',
+                        data: {
+                            labels: data.category_labels || [],
+                            datasets: [{
+                                data: data.category_amounts || [],
+                                backgroundColor: colors.slice(0, data.category_labels?.length || 0),
+                                borderWidth: 0,
+                                hoverOffset: 10
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    position: 'right',
+                                    labels: {
+                                        padding: 15,
+                                        font: {
+                                            size: 13,
+                                            weight: '500'
+                                        },
+                                        usePointStyle: true,
+                                        pointStyle: 'circle'
+                                    }
+                                },
+                                tooltip: {
+                                    callbacks: {
+                                        label: function(context) {
+                                            const label = context.label || '';
+                                            const value = context.parsed || 0;
+                                            const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                            const percent = ((value / total) * 100).toFixed(1);
+                                            return `${label}: ¥${value.toFixed(2)} (${percent}%)`;
+                                        }
+                                    },
+                                    backgroundColor: 'rgba(0,0,0,0.8)',
+                                    padding: 12,
+                                    titleFont: { size: 14, weight: '600' },
+                                    bodyFont: { size: 13 }
+                                }
+                            },
+                            animation: {
+                                animateRotate: true,
+                                animateScale: true,
+                                duration: 1000
                             }
                         }
-                    }
-                });
+                    });
+
+                    // 趋势图 - 更漂亮的样式
+                    if (trendChart) trendChart.destroy();
+                    const ctx2 = document.getElementById('trendChart').getContext('2d');
+                    trendChart = new Chart(ctx2, {
+                        type: 'line',
+                        data: {
+                            labels: data.month_labels || [],
+                            datasets: [{
+                                label: '月度支出',
+                                data: data.month_amounts || [],
+                                borderColor: '#667eea',
+                                backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                                borderWidth: 3,
+                                fill: true,
+                                tension: 0.4,
+                                pointRadius: 5,
+                                pointHoverRadius: 7,
+                                pointBackgroundColor: '#667eea',
+                                pointBorderColor: '#fff',
+                                pointBorderWidth: 2,
+                                pointHoverBackgroundColor: '#764ba2',
+                                pointHoverBorderColor: '#fff'
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    display: false
+                                },
+                                tooltip: {
+                                    backgroundColor: 'rgba(0,0,0,0.8)',
+                                    padding: 12,
+                                    titleFont: { size: 14, weight: '600' },
+                                    bodyFont: { size: 13 },
+                                    callbacks: {
+                                        label: function(context) {
+                                            return '支出: ¥' + context.parsed.y.toFixed(2);
+                                        }
+                                    }
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    ticks: {
+                                        callback: function(value) {
+                                            return '¥' + value.toFixed(0);
+                                        },
+                                        font: { size: 12 }
+                                    },
+                                    grid: {
+                                        color: 'rgba(0,0,0,0.05)'
+                                    }
+                                },
+                                x: {
+                                    ticks: {
+                                        font: { size: 12 }
+                                    },
+                                    grid: {
+                                        display: false
+                                    }
+                                }
+                            },
+                            animation: {
+                                duration: 1000,
+                                easing: 'easeInOutQuart'
+                            }
+                        }
+                    });
+                }
+            } catch (e) {
+                console.error('加载统计失败:', e);
+            }
+        }
+
+        // 文件选择
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                document.getElementById('fileName').textContent = `已选择：${file.name}`;
             }
         }
 
@@ -671,8 +1130,17 @@
             const file = event.target.files[0];
             if (!file) return;
             
+            if (!file.name.endsWith('.xlsx')) {
+                document.getElementById('uploadResult').innerHTML = 
+                    '<div class="error-message">❌ 请上传 .xlsx 格式的 Excel 文件</div>';
+                return;
+            }
+            
             const formData = new FormData();
             formData.append('file', file);
+            
+            const resultDiv = document.getElementById('uploadResult');
+            resultDiv.innerHTML = '<div style="padding: 15px; text-align: center; color: #667eea;">⏳ 正在上传...</div>';
             
             fetch('/api/import', {
                 method: 'POST',
@@ -680,42 +1148,76 @@
             })
             .then(r => r.text())
             .then(text => {
-                document.getElementById('uploadResult').innerHTML = `<div style="color: green; padding: 10px; background: #d4edda; border-radius: 6px;">${text}</div>`;
-                setTimeout(() => {
-                    loadRecords();
-                    loadOverview();
-                }, 1000);
+                if (text.startsWith('ok:')) {
+                    resultDiv.innerHTML = `<div class="success-message">✅ ${text}</div>`;
+                    document.getElementById('fileName').textContent = '';
+                    document.getElementById('fileInput').value = '';
+                    setTimeout(() => {
+                        loadRecords();
+                        loadOverview();
+                        if (categoryChart) loadStats();
+                    }, 1000);
+                } else {
+                    resultDiv.innerHTML = `<div class="error-message">❌ ${text}</div>`;
+                }
             })
             .catch(e => {
-                document.getElementById('uploadResult').innerHTML = `<div style="color: red; padding: 10px; background: #f8d7da; border-radius: 6px;">上传失败: ${e.message}</div>`;
+                resultDiv.innerHTML = `<div class="error-message">❌ 上传失败: ${e.message}</div>`;
             });
         }
+
+        // 拖拽上传
+        const uploadArea = document.getElementById('uploadArea');
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file) {
+                document.getElementById('fileInput').files = e.dataTransfer.files;
+                handleFileUpload({target: {files: e.dataTransfer.files}});
+            }
+        });
 
         // 加载分类
         async function loadCategories() {
             const token = sessionStorage.getItem('admin_token');
-            const response = await fetch('/api/admin/categories', {
-                headers: {'Authorization': `Bearer ${token}`}
-            });
-            const data = await response.json();
-            if (data.success) {
-                const tbody = document.getElementById('categoriesTable');
-                tbody.innerHTML = data.categories.map(c => `
-                    <tr>
-                        <td>${c.category}</td>
-                        <td>${c.count}</td>
-                        <td>${c.amount.toFixed(2)}</td>
-                        <td>
-                            <button class="btn" style="width: auto; padding: 5px 10px; font-size: 12px;" onclick="renameCategory('${c.category}')">重命名</button>
-                        </td>
-                    </tr>
-                `).join('');
+            try {
+                const response = await fetch('/api/admin/categories', {
+                    headers: {'Authorization': `Bearer ${token}`}
+                });
+                const data = await response.json();
+                if (data.success) {
+                    const tbody = document.getElementById('categoriesTable');
+                    if (data.categories.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; padding: 40px; color: #999;">暂无分类</td></tr>';
+                    } else {
+                        tbody.innerHTML = data.categories.map(c => `
+                            <tr>
+                                <td style="font-weight: 600; color: #667eea;">${c.category}</td>
+                                <td>${c.count}</td>
+                                <td style="font-weight: 600; color: #e74c3c;">¥${c.amount.toFixed(2)}</td>
+                                <td>
+                                    <button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px;" onclick="renameCategory('${c.category.replace(/'/g, "\\'")}')">重命名</button>
+                                </td>
+                            </tr>
+                        `).join('');
+                    }
+                }
+            } catch (e) {
+                console.error('加载分类失败:', e);
             }
         }
 
         function renameCategory(oldName) {
             const newName = prompt(`重命名分类 "${oldName}" 为：`, oldName);
-            if (!newName || newName === oldName) return;
+            if (!newName || newName === oldName || !newName.trim()) return;
             
             const token = sessionStorage.getItem('admin_token');
             fetch('/api/admin/categories/rename', {
@@ -724,22 +1226,26 @@
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify({old_name: oldName, new_name: newName})
+                body: JSON.stringify({old_name: oldName, new_name: newName.trim()})
             })
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
+                    alert(`✅ 已将分类「${oldName}」重命名为「${newName}」\n📝 更新了 ${data.count || 0} 条历史记录`);
                     loadCategories();
                     loadOverview();
+                    if (categoryChart) loadStats();
                 } else {
-                    alert(data.error || '重命名失败');
+                    alert('❌ ' + (data.error || '重命名失败'));
                 }
+            })
+            .catch(e => {
+                alert('❌ 重命名失败: ' + e.message);
             });
         }
 
         function showAddCategoryModal() {
-            // 简化：直接通过重命名"其他"分类来新增
-            alert('新增分类：在记录列表或批量导入时直接输入新分类名即可自动创建');
+            alert('💡 新增分类：\n\n在「记录列表」或「批量导入」时直接输入新分类名即可自动创建。\n\n例如：在分类列输入「早点」、「宵夜」等新名称，系统会自动创建该分类。');
         }
 
         // 初始化
@@ -747,4 +1253,3 @@
     </script>
 </body>
 </html>
-
