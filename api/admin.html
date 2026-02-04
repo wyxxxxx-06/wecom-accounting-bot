@@ -954,20 +954,20 @@
             <!-- 记录列表 -->
             <div class="section" id="records">
                 <div class="table-container">
-                    <div class="table-header">
-                        <div class="search-box" style="flex-wrap: wrap; gap: 10px;">
-                            <input type="text" id="searchInput" placeholder="🔍 搜索描述或分类..." style="flex: 1; min-width: 200px;">
-                            <input type="date" id="dateFrom" placeholder="开始日期" style="width: 150px;">
-                            <input type="date" id="dateTo" placeholder="结束日期" style="width: 150px;">
-                            <input type="number" id="amountMin" placeholder="最小金额" step="0.01" style="width: 120px;">
-                            <input type="number" id="amountMax" placeholder="最大金额" step="0.01" style="width: 120px;">
-                            <select id="categoryFilter" multiple style="width: 150px; min-height: 40px;" title="按住Ctrl多选分类">
+                    <div class="table-header" style="flex-direction: column; gap: 15px;">
+                        <div class="search-box" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; width: 100%;">
+                            <input type="text" id="searchInput" placeholder="🔍 搜索描述或分类..." style="grid-column: span 2;">
+                            <input type="date" id="dateFrom" placeholder="开始日期">
+                            <input type="date" id="dateTo" placeholder="结束日期">
+                            <input type="number" id="amountMin" placeholder="最小金额" step="0.01">
+                            <input type="number" id="amountMax" placeholder="最大金额" step="0.01">
+                            <select id="categoryFilter" multiple style="min-height: 40px;" title="按住Ctrl多选分类">
                                 <option value="">全部分类</option>
                             </select>
-                            <button class="btn" onclick="loadRecords()" style="width: auto; padding: 10px 24px;">查询</button>
-                            <button class="btn" onclick="resetFilters()" style="width: auto; padding: 10px 24px; background: #6c757d;">重置</button>
+                            <button class="btn" onclick="loadRecords()" style="width: 100%;">查询</button>
+                            <button class="btn" onclick="resetFilters()" style="width: 100%; background: #6c757d;">重置</button>
                         </div>
-                        <div style="display: flex; gap: 10px; margin-top: 10px; align-items: center;">
+                        <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
                             <button class="btn" onclick="toggleSelectAll()" style="width: auto; padding: 10px 24px; background: #17a2b8;">全选/反选</button>
                             <button class="btn" onclick="batchDelete()" style="width: auto; padding: 10px 24px; background: #dc3545;" id="batchDeleteBtn" disabled>批量删除 (<span id="selectedCount">0</span>)</button>
                             <button class="btn" onclick="exportRecords()" style="width: auto; padding: 10px 24px; background: #28a745;">导出Excel</button>
@@ -1003,18 +1003,36 @@
                     <div id="tableStatsContent" style="padding: 25px;">
                         <!-- 月份列表 -->
                         <div id="monthList" class="month-grid"></div>
-                        <!-- 分类统计 -->
-                        <div id="categoryStats" class="category-stats" style="display: none;"></div>
                         <!-- 日期列表 -->
                         <div id="dayList" class="day-grid" style="display: none;"></div>
                         <!-- 明细列表 -->
                         <div id="detailList" class="detail-list" style="display: none;"></div>
+                        <!-- 分类统计（始终在下方） -->
+                        <div id="categoryStats" class="category-stats" style="display: none;"></div>
                     </div>
                 </div>
             </div>
 
             <!-- 图形统计 -->
             <div class="section" id="stats">
+                <div class="table-container" style="margin-bottom: 25px;">
+                    <div class="table-header">
+                        <h3 style="margin: 0;">统计时间范围</h3>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <select id="statsPeriod" onchange="loadStats()" style="padding: 8px 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px;">
+                                <option value="all">全部数据</option>
+                                <option value="year">按年</option>
+                                <option value="month">按月</option>
+                                <option value="week">按周</option>
+                                <option value="day">按日</option>
+                            </select>
+                            <input type="number" id="statsYear" placeholder="年份" min="2020" max="2099" style="width: 100px; padding: 8px 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px; display: none;">
+                            <input type="number" id="statsMonth" placeholder="月份" min="1" max="12" style="width: 100px; padding: 8px 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px; display: none;">
+                            <input type="date" id="statsDate" style="width: 150px; padding: 8px 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px; display: none;">
+                            <button class="btn" onclick="loadStats()" style="width: auto; padding: 8px 16px; font-size: 14px;">刷新</button>
+                        </div>
+                    </div>
+                </div>
                 <div class="chart-container">
                     <h3>分类支出占比</h3>
                     <div class="chart-wrapper">
@@ -1022,7 +1040,7 @@
                     </div>
                 </div>
                 <div class="chart-container">
-                    <h3>月度支出趋势</h3>
+                    <h3 id="trendChartTitle">月度支出趋势</h3>
                     <div class="chart-wrapper">
                         <canvas id="trendChart"></canvas>
                     </div>
@@ -1179,13 +1197,38 @@
             else if (section === 'categories') loadCategories();
         }
 
+        // 通用fetch函数，带token刷新和错误处理
+        async function fetchWithAuth(url, options = {}) {
+            const token = sessionStorage.getItem('admin_token');
+            if (!token) {
+                throw new Error('未登录');
+            }
+            
+            const response = await fetch(url, {
+                ...options,
+                headers: {
+                    ...options.headers,
+                    'Authorization': `Bearer ${token}`,
+                    'Cache-Control': 'no-cache',
+                    'Pragma': 'no-cache'
+                },
+                cache: 'no-cache'
+            });
+            
+            if (response.status === 401 || response.status === 403) {
+                sessionStorage.removeItem('admin_token');
+                alert('登录已过期，请重新登录');
+                window.location.reload();
+                throw new Error('登录已过期');
+            }
+            
+            return response;
+        }
+
         // 加载概览
         async function loadOverview() {
-            const token = sessionStorage.getItem('admin_token');
             try {
-                const response = await fetch('/api/admin/overview', {
-                    headers: {'Authorization': `Bearer ${token}`}
-                });
+                const response = await fetchWithAuth('/api/admin/overview');
                 const data = await response.json();
                 if (data.success) {
                     document.getElementById('totalCount').textContent = (data.total_count || 0).toLocaleString();
@@ -1195,18 +1238,14 @@
                 }
                 
                 // 加载周统计
-                const weekResponse = await fetch('/api/admin/weekly_stats', {
-                    headers: {'Authorization': `Bearer ${token}`}
-                });
+                const weekResponse = await fetchWithAuth('/api/admin/weekly_stats');
                 const weekData = await weekResponse.json();
                 if (weekData.success) {
                     document.getElementById('weekAmount').textContent = weekData.total_amount.toFixed(2) + ' 元';
                 }
                 
                 // 加载平均每日支出
-                const avgResponse = await fetch('/api/admin/avg_daily?period=month', {
-                    headers: {'Authorization': `Bearer ${token}`}
-                });
+                const avgResponse = await fetchWithAuth('/api/admin/avg_daily?period=month');
                 const avgData = await avgResponse.json();
                 if (avgData.success) {
                     document.getElementById('avgDaily').textContent = avgData.avg_daily.toFixed(2) + ' 元';
@@ -1314,9 +1353,7 @@
             });
             
             try {
-                const response = await fetch(`/api/admin/records?${params}`, {
-                    headers: {'Authorization': `Bearer ${token}`}
-                });
+                const response = await fetchWithAuth(`/api/admin/records?${params}`);
                 const data = await response.json();
                 if (data.success) {
                     // 加载分类列表（用于筛选）
@@ -1588,10 +1625,45 @@
         // 加载统计
         async function loadStats() {
             const token = sessionStorage.getItem('admin_token');
+            if (!token) {
+                alert('请先登录');
+                return;
+            }
+            
+            // 显示/隐藏筛选控件
+            const period = document.getElementById('statsPeriod').value;
+            document.getElementById('statsYear').style.display = (period === 'year' || period === 'month') ? 'block' : 'none';
+            document.getElementById('statsMonth').style.display = period === 'month' ? 'block' : 'none';
+            document.getElementById('statsDate').style.display = period === 'day' ? 'block' : 'none';
+            
+            // 设置默认值
+            if (period === 'year' || period === 'month') {
+                const now = new Date();
+                if (!document.getElementById('statsYear').value) {
+                    document.getElementById('statsYear').value = now.getFullYear();
+                }
+                if (period === 'month' && !document.getElementById('statsMonth').value) {
+                    document.getElementById('statsMonth').value = now.getMonth() + 1;
+                }
+            }
+            if (period === 'day' && !document.getElementById('statsDate').value) {
+                const today = new Date();
+                document.getElementById('statsDate').value = today.toISOString().split('T')[0];
+            }
+            
             try {
-                const response = await fetch('/api/admin/stats', {
-                    headers: {'Authorization': `Bearer ${token}`}
-                });
+                let url = '/api/admin/stats?';
+                if (period === 'year' && document.getElementById('statsYear').value) {
+                    url += `year=${document.getElementById('statsYear').value}`;
+                } else if (period === 'month' && document.getElementById('statsYear').value && document.getElementById('statsMonth').value) {
+                    url += `year=${document.getElementById('statsYear').value}&month=${document.getElementById('statsMonth').value}`;
+                } else if (period === 'day' && document.getElementById('statsDate').value) {
+                    url += `date=${document.getElementById('statsDate').value}`;
+                } else if (period === 'week') {
+                    url += 'week=1';
+                }
+                
+                const response = await fetchWithAuth(url);
                 const data = await response.json();
                 if (data.success) {
                     // 分类占比图 - 更漂亮的样式
@@ -1661,6 +1733,24 @@
                         }
                     });
 
+                    // 更新标题
+                    let title = '支出趋势';
+                    if (period === 'year') {
+                        title = `${document.getElementById('statsYear').value || '年度'}支出趋势`;
+                    } else if (period === 'month') {
+                        const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', 
+                                         '七月', '八月', '九月', '十月', '十一月', '十二月'];
+                        const month = parseInt(document.getElementById('statsMonth').value) - 1;
+                        title = `${document.getElementById('statsYear').value || ''}年${monthNames[month] || ''}每日支出趋势`;
+                    } else if (period === 'week') {
+                        title = '本周每日支出趋势';
+                    } else if (period === 'day') {
+                        title = '当日支出趋势';
+                    } else {
+                        title = '月度支出趋势';
+                    }
+                    document.getElementById('trendChartTitle').textContent = title;
+                    
                     // 趋势图 - 更漂亮的样式，高清晰度
                     if (trendChart) trendChart.destroy();
                     const ctx2 = document.getElementById('trendChart').getContext('2d');
@@ -1670,12 +1760,13 @@
                     ctx2.canvas.height = ctx2.canvas.offsetHeight * dpr;
                     ctx2.scale(dpr, dpr);
                     
+                    const trendLabels = data.day_labels || data.month_labels || [];
                     trendChart = new Chart(ctx2, {
                         type: 'line',
                         data: {
-                            labels: data.month_labels || [],
+                            labels: trendLabels,
                             datasets: [{
-                                label: '月度支出',
+                                label: period === 'day' ? '当日支出' : (period === 'week' ? '本周支出' : (period === 'month' ? '每日支出' : '月度支出')),
                                 data: data.month_amounts || [],
                                 borderColor: '#667eea',
                                 backgroundColor: 'rgba(102, 126, 234, 0.1)',

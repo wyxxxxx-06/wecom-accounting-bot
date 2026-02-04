@@ -2838,10 +2838,53 @@ async def admin_delete_record(
 
 
 @app.get("/api/admin/stats")
-async def admin_stats(payload: dict = Depends(verify_admin_token)):
+async def admin_stats(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
     """统计数据（用于图表）"""
     try:
-        records = get_records()
+        params = dict(request.query_params)
+        year = params.get("year", "")
+        month = params.get("month", "")
+        date = params.get("date", "")
+        week = params.get("week", "")
+        
+        all_records = get_records()
+        
+        # 根据筛选条件过滤记录
+        if date:
+            # 单日
+            date_obj = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=LOCAL_TZ)
+            date_start = date_obj
+            date_end = date_obj + timedelta(days=1)
+            records = filter_records_by_local_range(all_records, date_start, date_end)
+        elif year and month:
+            # 单月
+            year_int = int(year)
+            month_int = int(month)
+            month_start = datetime(year_int, month_int, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            if month_int == 12:
+                month_end = datetime(year_int + 1, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            else:
+                month_end = datetime(year_int, month_int + 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            records = filter_records_by_local_range(all_records, month_start, month_end)
+        elif year:
+            # 全年
+            year_int = int(year)
+            year_start = datetime(year_int, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            year_end = datetime(year_int + 1, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+            records = filter_records_by_local_range(all_records, year_start, year_end)
+        elif week:
+            # 本周
+            now = datetime.now(LOCAL_TZ)
+            days_since_monday = now.weekday()
+            week_start = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+            week_end = now + timedelta(days=1)
+            records = filter_records_by_local_range(all_records, week_start, week_end)
+        else:
+            # 全部
+            records = all_records
         
         # 分类统计
         category_amounts = {}
@@ -2853,25 +2896,70 @@ async def admin_stats(payload: dict = Depends(verify_admin_token)):
         category_labels = list(category_amounts.keys())
         category_amounts_list = [category_amounts[c] for c in category_labels]
         
-        # 月度趋势（近12个月）
-        monthly_amounts = {}
-        for r in records:
-            dt = to_local_datetime(r["created_at"])
-            month_key = dt.strftime("%Y-%m")
-            amount = float(r.get("amount", 0))
-            monthly_amounts[month_key] = monthly_amounts.get(month_key, 0) + amount
-        
-        # 排序
-        sorted_months = sorted(monthly_amounts.keys())[-12:]
-        month_labels = sorted_months
-        month_amounts_list = [monthly_amounts[m] for m in sorted_months]
+        # 趋势统计
+        if date:
+            # 按小时统计
+            hourly_amounts = {}
+            for r in records:
+                dt = to_local_datetime(r["created_at"])
+                hour_key = dt.strftime("%H:00")
+                amount = float(r.get("amount", 0))
+                hourly_amounts[hour_key] = hourly_amounts.get(hour_key, 0) + amount
+            sorted_hours = sorted(hourly_amounts.keys())
+            trend_labels = sorted_hours
+            trend_amounts = [hourly_amounts[h] for h in sorted_hours]
+        elif year and month:
+            # 按日统计
+            daily_amounts = {}
+            for r in records:
+                dt = to_local_datetime(r["created_at"])
+                day_key = dt.strftime("%m-%d")
+                amount = float(r.get("amount", 0))
+                daily_amounts[day_key] = daily_amounts.get(day_key, 0) + amount
+            sorted_days = sorted(daily_amounts.keys())
+            trend_labels = sorted_days
+            trend_amounts = [daily_amounts[d] for d in sorted_days]
+        elif week:
+            # 按日统计（本周）
+            daily_amounts = {}
+            for r in records:
+                dt = to_local_datetime(r["created_at"])
+                day_key = dt.strftime("%m-%d")
+                amount = float(r.get("amount", 0))
+                daily_amounts[day_key] = daily_amounts.get(day_key, 0) + amount
+            sorted_days = sorted(daily_amounts.keys())
+            trend_labels = sorted_days
+            trend_amounts = [daily_amounts[d] for d in sorted_days]
+        elif year:
+            # 按月统计
+            monthly_amounts = {}
+            for r in records:
+                dt = to_local_datetime(r["created_at"])
+                month_key = dt.strftime("%Y-%m")
+                amount = float(r.get("amount", 0))
+                monthly_amounts[month_key] = monthly_amounts.get(month_key, 0) + amount
+            sorted_months = sorted(monthly_amounts.keys())
+            trend_labels = sorted_months
+            trend_amounts = [monthly_amounts[m] for m in sorted_months]
+        else:
+            # 默认：近12个月
+            monthly_amounts = {}
+            for r in records:
+                dt = to_local_datetime(r["created_at"])
+                month_key = dt.strftime("%Y-%m")
+                amount = float(r.get("amount", 0))
+                monthly_amounts[month_key] = monthly_amounts.get(month_key, 0) + amount
+            sorted_months = sorted(monthly_amounts.keys())[-12:]
+            trend_labels = sorted_months
+            trend_amounts = [monthly_amounts[m] for m in sorted_months]
         
         return {
             "success": True,
             "category_labels": category_labels,
             "category_amounts": category_amounts_list,
-            "month_labels": month_labels,
-            "month_amounts": month_amounts_list
+            "month_labels": trend_labels,
+            "month_amounts": trend_amounts,
+            "day_labels": trend_labels if (date or (year and month) or week) else None
         }
     except Exception as e:
         print(f"统计错误: {str(e)[:100]}")
