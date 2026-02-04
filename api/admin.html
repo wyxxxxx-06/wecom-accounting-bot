@@ -662,6 +662,87 @@
             color: #e74c3c;
             font-weight: 600;
         }
+        .category-stats {
+            margin-bottom: 30px;
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        }
+        .category-stats h4 {
+            margin: 0 0 20px 0;
+            color: #333;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .category-stats h4 .toggle-btn {
+            font-size: 14px;
+            color: #667eea;
+            cursor: pointer;
+            font-weight: normal;
+            padding: 5px 12px;
+            border: 1px solid #667eea;
+            border-radius: 6px;
+            transition: all 0.3s;
+        }
+        .category-stats h4 .toggle-btn:hover {
+            background: #667eea;
+            color: white;
+        }
+        .category-list {
+            display: grid;
+            gap: 12px;
+        }
+        .category-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+        .category-item:hover {
+            background: #e9ecef;
+            transform: translateX(5px);
+        }
+        .category-item .category-name {
+            font-weight: 600;
+            color: #333;
+            font-size: 15px;
+        }
+        .category-item .category-info {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        .category-item .category-amount {
+            font-size: 16px;
+            font-weight: 700;
+            color: #e74c3c;
+        }
+        .category-item .category-count {
+            font-size: 13px;
+            color: #888;
+        }
+        .category-item .rank {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 50%;
+            font-size: 13px;
+            font-weight: 700;
+            margin-right: 12px;
+        }
+        .category-item.top3 .rank {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
         .btn-secondary {
             background: #6c757d;
         }
@@ -779,6 +860,8 @@
                     <div id="tableStatsContent" style="padding: 25px;">
                         <!-- 月份列表 -->
                         <div id="monthList" class="month-grid"></div>
+                        <!-- 分类统计 -->
+                        <div id="categoryStats" class="category-stats" style="display: none;"></div>
                         <!-- 日期列表 -->
                         <div id="dayList" class="day-grid" style="display: none;"></div>
                         <!-- 明细列表 -->
@@ -1402,9 +1485,11 @@
                 if (data.success) {
                     currentView = 'months';
                     currentYear = data.year;
+                    showAllCategories = false;
                     document.getElementById('tableStatsTitle').textContent = `${data.year}年所有月份`;
                     document.getElementById('backBtn').style.display = 'none';
                     document.getElementById('monthList').style.display = 'grid';
+                    document.getElementById('categoryStats').style.display = 'none';
                     document.getElementById('dayList').style.display = 'none';
                     document.getElementById('detailList').style.display = 'none';
                     
@@ -1452,6 +1537,9 @@
                     document.getElementById('dayList').style.display = 'grid';
                     document.getElementById('detailList').style.display = 'none';
                     
+                    // 加载分类统计（显示在日期列表上方）
+                    loadCategoryStats(year, month);
+                    
                     const dayList = document.getElementById('dayList');
                     dayList.innerHTML = '';
                     
@@ -1493,6 +1581,7 @@
                         `${dateObj.getFullYear()}年${monthNames[dateObj.getMonth()]}${dateObj.getDate()}日`;
                     document.getElementById('backBtn').style.display = 'block';
                     document.getElementById('monthList').style.display = 'none';
+                    document.getElementById('categoryStats').style.display = 'none';
                     document.getElementById('dayList').style.display = 'none';
                     document.getElementById('detailList').style.display = 'block';
                     
@@ -1528,6 +1617,78 @@
                 console.error('加载日期明细失败:', e);
                 alert('❌ 加载日期明细失败: ' + e.message);
             }
+        }
+
+        // 加载分类统计
+        let showAllCategories = false;
+        async function loadCategoryStats(year, month) {
+            const token = sessionStorage.getItem('admin_token');
+            try {
+                const response = await fetch(`/api/admin/month_category_stats?year=${year}&month=${month}`, {
+                    headers: {'Authorization': `Bearer ${token}`}
+                });
+                const data = await response.json();
+                if (data.success) {
+                    showAllCategories = false;
+                    const categoryStats = document.getElementById('categoryStats');
+                    categoryStats.style.display = 'block';
+                    renderCategoryStats(data);
+                }
+            } catch (e) {
+                console.error('加载分类统计失败:', e);
+            }
+        }
+
+        // 渲染分类统计
+        function renderCategoryStats(data) {
+            const categoryStats = document.getElementById('categoryStats');
+            const categoriesToShow = showAllCategories ? data.all : data.top10;
+            const hasMore = data.all.length > 10;
+            
+            categoryStats.innerHTML = `
+                <h4>
+                    <span>分类支出统计</span>
+                    ${hasMore ? `<span class="toggle-btn" onclick="toggleCategoryStats(${data.year}, ${data.month})">
+                        ${showAllCategories ? '收起' : `查看全部 (${data.all.length}个分类)`}
+                    </span>` : ''}
+                </h4>
+                <div class="category-list">
+                    ${categoriesToShow.map((item, index) => {
+                        const rank = index + 1;
+                        const rankClass = rank <= 3 ? 'top3' : '';
+                        return `
+                            <div class="category-item ${rankClass}">
+                                <div style="display: flex; align-items: center;">
+                                    <span class="rank">${rank}</span>
+                                    <span class="category-name">${item.category || '未分类'}</span>
+                                </div>
+                                <div class="category-info">
+                                    <span class="category-count">${item.count} 条</span>
+                                    <span class="category-amount">¥${item.amount.toFixed(2)}</span>
+                                </div>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+        }
+
+        // 切换显示全部/前10
+        function toggleCategoryStats(year, month) {
+            showAllCategories = !showAllCategories;
+            const token = sessionStorage.getItem('admin_token');
+            fetch(`/api/admin/month_category_stats?year=${year}&month=${month}`, {
+                headers: {'Authorization': `Bearer ${token}`}
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    renderCategoryStats(data);
+                }
+            })
+            .catch(e => {
+                console.error('切换分类统计失败:', e);
+            });
         }
 
         // 返回上一级

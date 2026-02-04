@@ -3048,3 +3048,60 @@ async def admin_date_records(
         return {"success": False, "error": str(e)}
 
 
+@app.get("/api/admin/month_category_stats")
+async def admin_month_category_stats(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """获取指定月份的分类统计"""
+    try:
+        params = dict(request.query_params)
+        year = int(params.get("year", datetime.now(LOCAL_TZ).year))
+        month = int(params.get("month", datetime.now(LOCAL_TZ).month))
+        
+        month_start = datetime(year, month, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+        if month == 12:
+            month_end = datetime(year + 1, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+        else:
+            month_end = datetime(year, month + 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
+        
+        all_records = get_records()
+        month_records = filter_records_by_local_range(all_records, month_start, month_end)
+        
+        # 按分类统计
+        category_stats = {}
+        for r in month_records:
+            category = r.get("category", "未分类")
+            amount = float(r.get("amount", 0))
+            if category not in category_stats:
+                category_stats[category] = {"amount": 0, "count": 0}
+            category_stats[category]["amount"] += amount
+            category_stats[category]["count"] += 1
+        
+        # 转换为列表并按金额排序
+        category_list = [
+            {
+                "category": cat,
+                "amount": stats["amount"],
+                "count": stats["count"]
+            }
+            for cat, stats in category_stats.items()
+        ]
+        category_list.sort(key=lambda x: x["amount"], reverse=True)
+        
+        # 前10名
+        top10 = category_list[:10]
+        
+        return {
+            "success": True,
+            "year": year,
+            "month": month,
+            "top10": top10,
+            "all": category_list,
+            "total": sum(c["amount"] for c in category_list)
+        }
+    except Exception as e:
+        print(f"月份分类统计错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
