@@ -919,6 +919,8 @@ def parse_message(content: str) -> dict:
         return {"type": "detail", "period": content.split(maxsplit=1)[1].strip()}
     if content in ["帮助", "help", "?"]:
         return {"type": "help"}
+    if content in ["网页", "管理", "后台", "管理后台"]:
+        return {"type": "admin_url"}
     if content in ["面板", "统计面板"]:
         return {"type": "dashboard"}
     if content in ["确认删", "确认删除"]:
@@ -1443,6 +1445,57 @@ def rename_category(old_name: str, new_name: str) -> dict:
         return {"success": False, "error": str(e)}
 
 
+# ============ 自定义设置 ============
+SETTINGS_CACHE = {"value": {}, "expires_at": 0}
+SETTINGS_CACHE_TTL = 300  # 设置缓存5分钟
+
+def get_setting(key: str, default: str = "") -> str:
+    """获取设置项（带缓存）"""
+    now = int(time.time())
+    # 检查缓存
+    if SETTINGS_CACHE["value"] and now < SETTINGS_CACHE["expires_at"]:
+        return SETTINGS_CACHE["value"].get(key, default)
+    try:
+        supabase = get_supabase_client()
+        result = supabase.table("settings").select("key,value").execute()
+        settings = {}
+        for item in result.data:
+            settings[item["key"]] = item["value"]
+        SETTINGS_CACHE["value"] = settings
+        SETTINGS_CACHE["expires_at"] = now + SETTINGS_CACHE_TTL
+        return settings.get(key, default)
+    except Exception as e:
+        print(f"获取设置错误: {str(e)[:100]}")
+        return default
+
+
+def set_setting(key: str, value: str) -> bool:
+    """设置配置项"""
+    try:
+        supabase = get_supabase_client()
+        # 检查是否已存在
+        existing = supabase.table("settings").select("key").eq("key", key).execute()
+        now = datetime.now(LOCAL_TZ).isoformat()
+        if existing.data:
+            supabase.table("settings").update({
+                "value": value,
+                "updated_at": now
+            }).eq("key", key).execute()
+        else:
+            supabase.table("settings").insert({
+                "key": key,
+                "value": value,
+                "created_at": now,
+                "updated_at": now
+            }).execute()
+        # 清除缓存
+        SETTINGS_CACHE["expires_at"] = 0
+        return True
+    except Exception as e:
+        print(f"设置配置错误: {str(e)[:100]}")
+        return False
+
+
 def get_all_categories() -> list:
     """获取所有已使用的分类（带缓存）"""
     now = int(time.time())
@@ -1709,71 +1762,43 @@ def format_debts(debts: list) -> str:
 
 
 def get_help_text() -> str:
-    """返回帮助信息"""
+    """返回帮助信息（支持自定义）"""
+    # 尝试获取自定义帮助文本
+    custom_help = get_setting("custom_help_text", "")
+    if custom_help.strip():
+        return custom_help
+    
+    # 默认帮助文本
     return """📖 记账机器人使用指南
 
 【记账】
 发送：分类 描述 金额
 例如：夜宵 鸡锁骨 18
-      夜宵 泡面 18
       买菜 西红柿 25
 也支持：描述 金额 / 金额 描述（自动分类）
 
 【查询统计】
-发送：今日 / 昨日 / 七天 / 半个月 / 一个月 / 本周 / 本月
-发送：统计 1月 / 1月统计 / 统计 2025年1月
-发送：统计面板 / 面板
+发送：今日 / 昨日 / 七天 / 本周 / 本月
+发送：统计 1月 / 统计面板
 
 【查看明细】
-发送：明细 / 明细 昨天 / 明细 01-21
+发送：明细 / 明细 昨天
 
 【修改/删除记录】
-发送：改 1 夜宵 鸡锁骨 16
-发送：删 2 / 删 1-4 / 删 昨天 1-3
+发送：改 1 描述 金额
+发送：删 2 / 删 1-4
 确认删除：确认删 / 取消删
-发送：回收站 / 恢复 1
+
 【补记】
 发送：补记 昨天 买烟 50
-发送：补记 01-21 买烟 50
-
-【按分类查询】
-发送：分类 夜宵 / 统计 夜宵
-或发送分类名：餐饮 / 交通 / 购物 / 娱乐 / 居住 / 医疗 / 教育 / 生活用品
-
-【外债（我欠别人）】
-欠 张三 1000
-还 张三 100
-查询外债
 
 【导出Excel】
-发送：导出 全部 / 所有
-发送：导出 本月 / 1月 / 2025年1月
-发送：导出 今日 / 昨日 / 七天 / 半个月 / 一个月
-发送：导出表格 2025年1月
+发送：导出 本月 / 导出 全部
 
-【快捷指令】
-发送：+ 买烟 20
-发送：上次 / 撤销
+【管理后台】
+发送：网页
 
-【纠错学习】
-纠错 关键词 分类
-示例：纠错 午饭 餐饮
-
-【分类管理】
-分类列表 / 所有分类
-重命名分类 餐饮 吃饭
-（会批量修改所有历史记录）
-
-【分类选择】
-当描述未学习时会提示选择分类
-回复序号即可，或发送 取消
-
-【周报/月报】
-订阅周报 / 订阅月报
-取消周报 / 取消月报
-周报 / 月报
-
-💡 所有记录共同统计，支持多人使用"""
+💡 发送 帮助 查看完整指南"""
 
 
 # ============ 处理消息 ============
@@ -1847,6 +1872,12 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
     
     if parsed["type"] == "help":
         return get_help_text()
+    
+    elif parsed["type"] == "admin_url":
+        if PUBLIC_BASE_URL:
+            return f"🌐 管理后台\n\n点击链接进入：\n{PUBLIC_BASE_URL}/api/admin\n\n💡 首次使用需要输入管理密码"
+        else:
+            return "❌ 管理后台链接未配置，请联系管理员设置 PUBLIC_BASE_URL"
     
     elif parsed["type"] == "record":
         try:
@@ -3061,6 +3092,44 @@ async def admin_rename_category(
             return {"success": False, "error": result.get("error", "重命名失败")}
     except Exception as e:
         print(f"重命名分类错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/settings")
+async def admin_get_settings(payload: dict = Depends(verify_admin_token)):
+    """获取所有设置"""
+    try:
+        supabase = get_supabase_client()
+        result = supabase.table("settings").select("key,value").execute()
+        settings = {}
+        for item in result.data:
+            settings[item["key"]] = item["value"]
+        return {"success": True, "settings": settings}
+    except Exception as e:
+        print(f"获取设置错误: {str(e)[:100]}")
+        return {"success": True, "settings": {}}
+
+
+@app.post("/api/admin/settings")
+async def admin_save_settings(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """保存设置"""
+    try:
+        data = await request.json()
+        key = data.get("key", "")
+        value = data.get("value", "")
+        
+        if not key:
+            return {"success": False, "error": "设置项名称不能为空"}
+        
+        if set_setting(key, value):
+            return {"success": True}
+        else:
+            return {"success": False, "error": "保存失败"}
+    except Exception as e:
+        print(f"保存设置错误: {str(e)[:100]}")
         return {"success": False, "error": str(e)}
 
 
