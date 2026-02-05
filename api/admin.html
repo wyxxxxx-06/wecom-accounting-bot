@@ -188,6 +188,15 @@
         .section.active {
             display: block;
         }
+        /* 分类下拉：可滚动选择 */
+        select.category-select {
+            max-height: 200px;
+            overflow-y: auto;
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            min-width: 120px;
+        }
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -1009,7 +1018,7 @@
                             <input type="date" id="dateTo" placeholder="结束日期">
                             <input type="number" id="amountMin" placeholder="最小金额" step="0.01">
                             <input type="number" id="amountMax" placeholder="最大金额" step="0.01">
-                            <select id="categoryFilter" multiple style="min-height: 40px;" title="按住Ctrl多选分类">
+                            <select id="categoryFilter" multiple class="category-select" style="min-height: 40px;" title="按住Ctrl多选分类">
                                 <option value="">全部分类</option>
                             </select>
                             <button class="btn" onclick="loadRecords()" style="width: 100%;">查询</button>
@@ -1018,6 +1027,12 @@
                         <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
                             <button class="btn" onclick="toggleSelectAll()" style="width: auto; padding: 10px 24px; background: #17a2b8;">全选/反选</button>
                             <button class="btn" onclick="batchDelete()" style="width: auto; padding: 10px 24px; background: #dc3545;" id="batchDeleteBtn" disabled>批量删除 (<span id="selectedCount">0</span>)</button>
+                            <span style="display: inline-flex; align-items: center; gap: 6px;">
+                                <select id="batchCategorySelect" class="category-select" style="min-width: 100px;">
+                                    <option value="">选择分类</option>
+                                </select>
+                                <button class="btn" onclick="batchSetCategory()" style="width: auto; padding: 10px 24px;" id="batchSetCategoryBtn" disabled>批量改分类</button>
+                            </span>
                             <button class="btn" onclick="exportRecords()" style="width: auto; padding: 10px 24px; background: #28a745;">导出Excel</button>
                         </div>
                     </div>
@@ -1110,20 +1125,17 @@
                     <button class="btn" onclick="document.getElementById('fileInput').click()" style="width: 100%;">选择文件</button>
                     
                     <div class="guide-box">
-                        <h4>使用说明</h4>
+                        <h4>历史记录：导出 → 修改 → 上传</h4>
                         <ol class="guide-steps">
-                            <li><strong>导出数据</strong>：在微信发送「导出 本月」或「导出 全部」获取 Excel 文件</li>
-                            <li><strong>修改数据</strong>：打开 Excel 的「明细」表，可以修改以下字段：
+                            <li><strong>导出</strong>：在「记录」页设置好日期、分类筛选后，点「导出Excel」，得到当前筛选结果的 Excel（含 ID、日期、时间、描述、金额、分类）</li>
+                            <li><strong>修改</strong>：在 Excel 的「明细」表中修改需要改的列（<b>不要改或删 ID 列</b>）：
                                 <ul style="margin-top: 8px; margin-left: 20px;">
                                     <li>日期（格式：2026-01-15）</li>
                                     <li>时间（格式：14:30）</li>
-                                    <li>描述（修改错别字或内容）</li>
-                                    <li>金额（修正金额）</li>
-                                    <li>分类（可以改成已有分类，也可以输入新分类名）</li>
+                                    <li>描述、金额、分类（可改为新分类名，系统会自动识别）</li>
                                 </ul>
                             </li>
-                            <li><strong>上传文件</strong>：修改完成后，点击上方按钮选择文件或拖拽文件到上传区域</li>
-                            <li><strong>自动更新</strong>：系统会按 ID 批量更新所有记录，完成后会显示更新结果</li>
+                            <li><strong>上传</strong>：修改完成后，在上方选择文件或拖拽到上传区域，系统按 ID 批量更新对应记录</li>
                         </ol>
                     </div>
                     
@@ -1146,10 +1158,16 @@
             <!-- 分类管理 -->
             <div class="section" id="categories">
                 <div class="table-container">
-                    <div class="table-header">
+                    <div class="table-header" style="flex-wrap: wrap; gap: 15px;">
                         <h3 style="margin: 0; color: #333; font-size: 18px;">分类列表</h3>
                         <button class="btn" onclick="showAddCategoryModal()" style="width: auto; padding: 10px 24px;">新增分类</button>
+                        <button class="btn" onclick="downloadCategoryExcel()" style="width: auto; padding: 10px 24px; background: #28a745;">下载分类表</button>
+                        <span style="display: inline-flex; align-items: center; gap: 8px;">
+                            <input type="file" id="categoryFileInput" accept=".xlsx" style="display:none" onchange="uploadCategoryExcel(event)">
+                            <button class="btn" onclick="document.getElementById('categoryFileInput').click()" style="width: auto; padding: 10px 24px;">上传分类表</button>
+                        </span>
                     </div>
+                    <div id="categoryUploadResult" style="margin-bottom: 15px; font-size: 13px;"></div>
                     <table>
                         <thead>
                             <tr>
@@ -1301,6 +1319,22 @@
     </div>
 
     <!-- 编辑记录模态框 -->
+    <!-- 删除分类弹窗 -->
+    <div class="modal" id="deleteCategoryModal" onclick="if(event.target===this) closeDeleteCategoryModal()">
+        <div class="modal-content" style="max-width: 420px;">
+            <h2>删除分类</h2>
+            <p id="deleteCategoryMessage" style="color: #333; margin: 0 0 15px 0;"></p>
+            <div id="deleteCategoryTargetWrap" style="margin-bottom: 15px; display: none;">
+                <label style="display: block; margin-bottom: 6px; font-size: 14px;">转移到分类：</label>
+                <select id="deleteCategoryTarget" class="category-select" style="width: 100%; max-height: 200px;"></select>
+            </div>
+            <div class="btn-group">
+                <button class="btn" id="deleteCategoryConfirmBtn" onclick="confirmDeleteCategory()">确认</button>
+                <button class="btn btn-secondary" onclick="closeDeleteCategoryModal()">取消</button>
+            </div>
+        </div>
+    </div>
+
     <div class="modal" id="editModal" onclick="if(event.target===this) closeEditModal()">
         <div class="modal-content">
             <h2>✏️ 编辑记录</h2>
@@ -1309,7 +1343,7 @@
             <input type="time" id="editTime" placeholder="时间" required>
             <input type="text" id="editDescription" placeholder="描述" required>
             <input type="number" step="0.01" id="editAmount" placeholder="金额" required>
-            <input type="text" id="editCategory" placeholder="分类" required>
+            <select id="editCategory" class="category-select" required style="width: 100%;"></select>
             <div class="btn-group">
                 <button class="btn" onclick="saveRecord()">保存</button>
                 <button class="btn btn-secondary" onclick="closeEditModal()">取消</button>
@@ -1797,25 +1831,32 @@
             }
         }
         
-        // 加载分类列表用于筛选
+        // 加载分类列表用于筛选和批量改分类下拉
         async function loadCategoriesForFilter() {
             try {
                 const response = await fetchWithAuth('/api/admin/categories');
                 const data = await response.json();
                 if (data.success) {
                     const select = document.getElementById('categoryFilter');
-                    const currentValue = Array.from(select.selectedOptions).map(o => o.value);
-                    select.innerHTML = '<option value="">全部分类</option>';
-                    data.categories.forEach(cat => {
-                        const categoryName = typeof cat === 'string' ? cat : cat.category;
-                        const option = document.createElement('option');
-                        option.value = categoryName;
-                        option.textContent = categoryName;
-                        if (currentValue.includes(categoryName)) {
-                            option.selected = true;
-                        }
-                        select.appendChild(option);
-                    });
+                    const currentValue = select ? Array.from(select.selectedOptions).map(o => o.value) : [];
+                    if (select) {
+                        select.innerHTML = '<option value="">全部分类</option>';
+                        (data.categories || []).forEach(cat => {
+                            const categoryName = typeof cat === 'string' ? cat : cat.category;
+                            const option = document.createElement('option');
+                            option.value = categoryName;
+                            option.textContent = categoryName;
+                            if (currentValue.includes(categoryName)) option.selected = true;
+                            select.appendChild(option);
+                        });
+                    }
+                    var batchSel = document.getElementById('batchCategorySelect');
+                    if (batchSel) {
+                        batchSel.innerHTML = '<option value="">选择分类</option>' + (data.categories || []).map(cat => {
+                            const name = typeof cat === 'string' ? cat : cat.category;
+                            return '<option value="' + (name || '').replace(/"/g, '&quot;') + '">' + (name || '').replace(/</g, '&lt;') + '</option>';
+                        }).join('');
+                    }
                 }
             } catch (e) {
                 console.error('加载分类列表失败:', e);
@@ -1848,12 +1889,40 @@
             const count = selectedRecords.size;
             document.getElementById('selectedCount').textContent = count;
             document.getElementById('batchDeleteBtn').disabled = count === 0;
-            
+            var batchCatBtn = document.getElementById('batchSetCategoryBtn');
+            if (batchCatBtn) batchCatBtn.disabled = count === 0;
             // 更新全选checkbox状态
             const checkboxes = document.querySelectorAll('.record-checkbox');
             const selectAll = document.getElementById('selectAllCheckbox');
             if (checkboxes.length > 0) {
                 selectAll.checked = checkboxes.length === count && count > 0;
+            }
+        }
+        // 批量改分类
+        async function batchSetCategory() {
+            var ids = Array.from(selectedRecords);
+            var catSel = document.getElementById('batchCategorySelect');
+            var category = catSel && catSel.value ? catSel.value.trim() : '';
+            if (ids.length === 0) { alert('请先勾选要修改的记录'); return; }
+            if (!category) { alert('请选择目标分类'); return; }
+            try {
+                const response = await fetchWithAuth('/api/admin/records/batch_set_category', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids: ids, category: category })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    alert('✅ 已将 ' + data.updated + ' 条记录改为「' + category + '」');
+                    selectedRecords.clear();
+                    updateSelectedCount();
+                    loadRecords(currentPage);
+                    loadOverview();
+                } else {
+                    alert('❌ ' + (data.error || '操作失败'));
+                }
+            } catch (e) {
+                alert('❌ ' + (e.message || '操作失败'));
             }
         }
         
@@ -1903,29 +1972,28 @@
             loadRecords(1);
         }
         
-        // 导出记录
+        // 导出记录（按当前筛选：日期范围 + 分类）
         async function exportRecords() {
             const dateFrom = document.getElementById('dateFrom').value;
             const dateTo = document.getElementById('dateTo').value;
+            const categoryFilter = document.getElementById('categoryFilter');
+            const selectedCats = Array.from(categoryFilter.selectedOptions).map(o => o.value).filter(Boolean);
             
             let url = '/api/admin/export?period=custom';
-            if (dateFrom) url += `&date_from=${dateFrom}`;
-            if (dateTo) url += `&date_to=${dateTo}`;
+            if (dateFrom) url += '&date_from=' + encodeURIComponent(dateFrom);
+            if (dateTo) url += '&date_to=' + encodeURIComponent(dateTo);
             if (!dateFrom && !dateTo) url = '/api/admin/export?period=all';
+            if (selectedCats.length) url += '&categories=' + encodeURIComponent(selectedCats.join(','));
             
-            // 使用fetch下载文件
             try {
                 const response = await fetchWithAuth(url);
                 if (response.ok) {
                     const blob = await response.blob();
-                    const downloadUrl = window.URL.createObjectURL(blob);
                     const a = document.createElement('a');
-                    a.href = downloadUrl;
-                    a.download = `records_export_${new Date().getTime()}.xlsx`;
-                    document.body.appendChild(a);
+                    a.href = window.URL.createObjectURL(blob);
+                    a.download = 'records_export_' + new Date().getTime() + '.xlsx';
                     a.click();
-                    document.body.removeChild(a);
-                    window.URL.revokeObjectURL(downloadUrl);
+                    window.URL.revokeObjectURL(a.href);
                 } else {
                     alert('导出失败，请检查登录状态');
                 }
@@ -1934,14 +2002,27 @@
             }
         }
 
-        // 编辑记录
-        function editRecord(id, date, time, description, amount, category) {
+        // 编辑记录（打开时填充分类下拉）
+        async function editRecord(id, date, time, description, amount, category) {
             document.getElementById('editId').value = id;
             document.getElementById('editDate').value = date;
             document.getElementById('editTime').value = time;
             document.getElementById('editDescription').value = description;
             document.getElementById('editAmount').value = amount;
-            document.getElementById('editCategory').value = category;
+            var editCatSel = document.getElementById('editCategory');
+            if (editCatSel.options.length <= 1) {
+                try {
+                    var r = await fetchWithAuth('/api/admin/categories');
+                    var d = await r.json();
+                    if (d.success && d.categories && d.categories.length) {
+                        editCatSel.innerHTML = '<option value="">选择分类</option>' + d.categories.map(function(c) {
+                            var name = typeof c === 'string' ? c : c.category;
+                            return '<option value="' + (name||'').replace(/"/g, '&quot;') + '">' + (name||'').replace(/</g, '&lt;') + '</option>';
+                        }).join('');
+                    }
+                } catch (e) {}
+            }
+            editCatSel.value = category || '';
             document.getElementById('editModal').classList.add('active');
         }
 
@@ -2290,27 +2371,27 @@
             const resultDiv = document.getElementById('uploadResult');
             resultDiv.innerHTML = '<div style="padding: 15px; text-align: center; color: #667eea;">⏳ 正在上传...</div>';
             
-            fetch('/api/import', {
+            fetchWithAuth('/api/admin/import', {
                 method: 'POST',
                 body: formData
             })
-            .then(r => r.text())
-            .then(text => {
-                if (text.startsWith('ok:')) {
-                    resultDiv.innerHTML = `<div class="success-message">✅ ${text}</div>`;
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    resultDiv.innerHTML = '<div class="success-message">✅ ' + (data.message || '已更新 ' + data.updated + ' 条') + '</div>';
                     document.getElementById('fileName').textContent = '';
                     document.getElementById('fileInput').value = '';
                     setTimeout(() => {
-                        loadRecords();
-                        loadOverview();
-                        if (categoryChart) loadStats();
+                        if (typeof loadRecords === 'function') loadRecords(1);
+                        if (typeof loadOverview === 'function') loadOverview();
+                        if (typeof loadStats === 'function' && typeof categoryChart !== 'undefined') loadStats();
                     }, 1000);
                 } else {
-                    resultDiv.innerHTML = `<div class="error-message">❌ ${text}</div>`;
+                    resultDiv.innerHTML = '<div class="error-message">❌ ' + (data.error || '上传失败') + '</div>';
                 }
             })
             .catch(e => {
-                resultDiv.innerHTML = `<div class="error-message">❌ 上传失败: ${e.message}</div>`;
+                resultDiv.innerHTML = '<div class="error-message">❌ 上传失败: ' + (e.message || '') + '</div>';
             });
         }
 
@@ -2339,24 +2420,155 @@
                 const response = await fetchWithAuth('/api/admin/categories');
                 const data = await response.json();
                 if (data.success) {
+                    const cats = data.categories || [];
                     const tbody = document.getElementById('categoriesTable');
-                    if (data.categories.length === 0) {
+                    if (cats.length === 0) {
                         tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; padding: 40px; color: #999;">暂无分类</td></tr>';
                     } else {
-                        tbody.innerHTML = data.categories.map(c => `
-                            <tr>
-                                <td style="font-weight: 600; color: #667eea;">${c.category}</td>
+                        tbody.innerHTML = cats.map(c => {
+                            var catEsc = (c.category||'').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                            return `<tr>
+                                <td style="font-weight: 600; color: #667eea;">${escapeHtml(c.category)}</td>
                                 <td>${c.count}</td>
-                                <td style="font-weight: 600; color: #e74c3c;">¥${c.amount.toFixed(2)}</td>
+                                <td style="font-weight: 600; color: #e74c3c;">¥${(c.amount||0).toFixed(2)}</td>
                                 <td>
-                                    <button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px;" onclick="renameCategory('${c.category.replace(/'/g, "\\'")}')">重命名</button>
+                                    <button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px;" onclick="renameCategory('${catEsc}')">重命名</button>
+                                    <button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px; background: #dc3545;" onclick="deleteCategory('${catEsc}', ${c.count||0})">删除</button>
                                 </td>
-                            </tr>
-                        `).join('');
+                            </tr>`;
+                        }).join('');
                     }
                 }
             } catch (e) {
                 console.error('加载分类失败:', e);
+            }
+        }
+        async function downloadCategoryExcel() {
+            try {
+                const response = await fetchWithAuth('/api/admin/export_categories');
+                if (!response.ok) throw new Error('下载失败');
+                const blob = await response.blob();
+                const a = document.createElement('a');
+                a.href = window.URL.createObjectURL(blob);
+                a.download = 'categories.xlsx';
+                a.click();
+                window.URL.revokeObjectURL(a.href);
+            } catch (e) {
+                alert('下载失败: ' + (e.message || '未知错误'));
+            }
+        }
+        async function uploadCategoryExcel(event) {
+            var file = event.target.files[0];
+            if (!file || !file.name.endsWith('.xlsx')) {
+                document.getElementById('categoryUploadResult').textContent = '请选择 .xlsx 文件';
+                return;
+            }
+            var resultEl = document.getElementById('categoryUploadResult');
+            resultEl.textContent = '上传中...';
+            try {
+                var form = new FormData();
+                form.append('file', file);
+                const response = await fetchWithAuth('/api/admin/import_categories', { method: 'POST', body: form });
+                const data = await response.json();
+                if (data.success) {
+                    resultEl.innerHTML = '✅ ' + (data.message || '上传成功');
+                    document.getElementById('categoryFileInput').value = '';
+                    loadCategories();
+                    loadOverview();
+                } else {
+                    resultEl.textContent = '❌ ' + (data.error || '上传失败');
+                }
+            } catch (e) {
+                resultEl.textContent = '❌ ' + (e.message || '上传失败');
+            }
+        }
+        var deleteCategoryName = '';
+        var deleteCategoryCount = 0;
+        var allCategoriesForDelete = [];
+        function deleteCategory(catName, count) {
+            deleteCategoryName = catName;
+            deleteCategoryCount = count || 0;
+            var msgEl = document.getElementById('deleteCategoryMessage');
+            var wrapEl = document.getElementById('deleteCategoryTargetWrap');
+            var targetSel = document.getElementById('deleteCategoryTarget');
+            var btnEl = document.getElementById('deleteCategoryConfirmBtn');
+            if (deleteCategoryCount > 0) {
+                msgEl.textContent = '该分类下有 ' + deleteCategoryCount + ' 条记录，请选择要转移到的分类（或输入新分类名将合并到该分类）。';
+                wrapEl.style.display = 'block';
+                targetSel.innerHTML = '<option value="">请选择目标分类</option>';
+                targetSel.size = 1;
+                fetchWithAuth('/api/admin/categories').then(r => r.json()).then(function(data) {
+                    if (data.success && data.categories) {
+                        allCategoriesForDelete = data.categories.map(function(c) { return typeof c === 'string' ? c : c.category; });
+                        allCategoriesForDelete.filter(function(c) { return c && c !== deleteCategoryName; }).forEach(function(c) {
+                            var opt = document.createElement('option');
+                            opt.value = c;
+                            opt.textContent = c;
+                            targetSel.appendChild(opt);
+                        });
+                    }
+                });
+                btnEl.textContent = '确认转移';
+            } else {
+                msgEl.textContent = '该分类下无记录。确定删除吗？（将清除该分类的别名）';
+                wrapEl.style.display = 'none';
+                btnEl.textContent = '确定删除';
+            }
+            document.getElementById('deleteCategoryModal').classList.add('active');
+        }
+        function closeDeleteCategoryModal() {
+            document.getElementById('deleteCategoryModal').classList.remove('active');
+            deleteCategoryName = '';
+            deleteCategoryCount = 0;
+        }
+        async function confirmDeleteCategory() {
+            if (deleteCategoryCount > 0) {
+                var targetSel = document.getElementById('deleteCategoryTarget');
+                var toCat = targetSel && targetSel.value ? targetSel.value.trim() : '';
+                if (!toCat) {
+                    alert('请选择要转移到的分类');
+                    return;
+                }
+                if (toCat === deleteCategoryName) {
+                    alert('不能转移到当前要删除的分类');
+                    return;
+                }
+                try {
+                    var response = await fetchWithAuth('/api/admin/categories/rename', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ old_name: deleteCategoryName, new_name: toCat })
+                    });
+                    var data = await response.json();
+                    if (data.success) {
+                        alert('✅ 已将该分类下 ' + (data.count || 0) + ' 条记录转移到「' + toCat + '」');
+                        closeDeleteCategoryModal();
+                        loadCategories();
+                        loadOverview();
+                    } else {
+                        alert('❌ ' + (data.error || '转移失败'));
+                    }
+                } catch (e) {
+                    alert('❌ ' + (e.message || '转移失败'));
+                }
+            } else {
+                try {
+                    var response = await fetchWithAuth('/api/admin/categories/clear_aliases', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: deleteCategoryName })
+                    });
+                    var data = await response.json();
+                    if (data.success) {
+                        alert('✅ 已删除该分类的别名');
+                        closeDeleteCategoryModal();
+                        loadCategories();
+                    } else {
+                        alert('❌ ' + (data.error || '删除失败'));
+                    }
+                } catch (e) {
+                    alert('❌ ' + (e.message || '删除失败'));
+                }
             }
         }
 
