@@ -267,21 +267,26 @@ def get_records_cached(max_records: int = 5000):
     now = int(time.time())
     # 检查缓存
     if RECORDS_CACHE["value"] and now < RECORDS_CACHE["expires_at"]:
+        print(f"使用缓存: {len(RECORDS_CACHE['value'])} 条记录")
         return RECORDS_CACHE["value"]
     try:
+        print("缓存过期或为空，从数据库加载...")
         supabase = get_supabase_client()
         query = supabase.table("records").select("*").order("created_at", desc=True).limit(max_records)
         result = query.execute()
         records = result.data
+        print(f"从数据库加载了 {len(records)} 条记录")
         # 更新缓存
         RECORDS_CACHE["value"] = records
         RECORDS_CACHE["expires_at"] = now + RECORDS_CACHE_TTL
         RECORDS_CACHE["count"] = len(records)
         return records
     except Exception as e:
-        print(f"缓存查询错误: {str(e)[:100]}")
+        import traceback
+        print(f"缓存查询错误: {traceback.format_exc()}")
         # 如果有旧缓存，返回旧缓存
         if RECORDS_CACHE["value"]:
+            print(f"使用旧缓存: {len(RECORDS_CACHE['value'])} 条记录")
             return RECORDS_CACHE["value"]
         return []
 
@@ -3179,7 +3184,10 @@ async def admin_monthly_stats(payload: dict = Depends(verify_admin_token)):
     try:
         now = datetime.now(LOCAL_TZ)
         year = now.year
+        
+        # 获取记录（带缓存）
         all_records = get_records_cached()
+        print(f"月度统计: 获取到 {len(all_records)} 条记录")
         
         monthly_stats = {}
         for month in range(1, 13):
@@ -3202,10 +3210,13 @@ async def admin_monthly_stats(payload: dict = Depends(verify_admin_token)):
         return {
             "success": True,
             "year": year,
-            "months": monthly_stats
+            "months": monthly_stats,
+            "total_records": len(all_records)
         }
     except Exception as e:
-        print(f"月度统计错误: {str(e)[:100]}")
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"月度统计错误: {error_detail}")
         return {"success": False, "error": str(e)}
 
 
