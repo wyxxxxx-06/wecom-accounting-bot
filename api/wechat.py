@@ -78,7 +78,7 @@ CATEGORY_LIST_CACHE = {"value": [], "expires_at": 0}
 CATEGORY_LIST_CACHE_TTL = 600  # 分类列表缓存10分钟
 # 记录缓存（用于管理后台统计）
 RECORDS_CACHE = {"value": [], "expires_at": 0, "count": 0}
-RECORDS_CACHE_TTL = 60  # 记录缓存1分钟（频繁变动所以时间短）
+RECORDS_CACHE_TTL = 30  # 记录缓存30秒，编辑后统计尽快更新
 
 # ============ 数据库操作（使用 REST API）============
 def get_supabase_client():
@@ -262,11 +262,12 @@ def get_records(start_date: datetime = None, end_date: datetime = None, category
         return []
 
 
-def get_records_cached(max_records: int = 5000):
-    """获取所有记录（带缓存，用于管理后台统计）"""
+def get_records_cached(max_records: int = 5000, force_refresh: bool = False):
+    """获取所有记录（带缓存，用于管理后台统计）。force_refresh=True 时强制从数据库重新加载。"""
     now = int(time.time())
-    # 检查缓存
-    if RECORDS_CACHE["value"] and now < RECORDS_CACHE["expires_at"]:
+    if force_refresh:
+        RECORDS_CACHE["expires_at"] = 0
+    if not force_refresh and RECORDS_CACHE["value"] and now < RECORDS_CACHE["expires_at"]:
         print(f"使用缓存: {len(RECORDS_CACHE['value'])} 条记录")
         return RECORDS_CACHE["value"]
     try:
@@ -1463,6 +1464,7 @@ def batch_update_records(updates: list) -> dict:
                 failed.append(upd["id"])
         except Exception:
             failed.append(upd["id"])
+    invalidate_records_cache()
     return {"success": success, "failed": failed}
 
 
@@ -1480,10 +1482,13 @@ def rename_category(old_name: str, new_name: str) -> dict:
             "category": new_name
         }).eq("category", old_name).execute()
         
-        # 清除缓存
+        # 清除缓存，保证统计与下拉框立即使用新分类名
         CATEGORY_ALIAS_CACHE["value"] = {}
         CATEGORY_ALIAS_CACHE["expires_at"] = 0
-        
+        CATEGORY_LIST_CACHE["value"] = []
+        CATEGORY_LIST_CACHE["expires_at"] = 0
+        invalidate_records_cache()
+
         return {"success": True, "count": len(result.data) if result.data else 0}
     except Exception as e:
         print(f"重命名分类错误: {str(e)[:100]}")
@@ -2933,7 +2938,7 @@ async def admin_update_record(
         
         supabase = get_supabase_client()
         result = supabase.table("records").update(update_data).eq("id", record_id).execute()
-        
+        invalidate_records_cache()
         if result.data:
             return {"success": True}
         else:
@@ -3179,14 +3184,17 @@ async def admin_save_settings(
 
 
 @app.get("/api/admin/monthly_stats")
-async def admin_monthly_stats(payload: dict = Depends(verify_admin_token)):
-    """获取今年所有月份的统计"""
+async def admin_monthly_stats(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """获取今年所有月份的统计。?fresh=1 时强制从数据库重新加载。"""
     try:
+        params = dict(request.query_params)
+        force_refresh = params.get("fresh") == "1"
         now = datetime.now(LOCAL_TZ)
         year = now.year
-        
-        # 获取记录（带缓存）
-        all_records = get_records_cached()
+        all_records = get_records_cached(force_refresh=force_refresh)
         print(f"月度统计: 获取到 {len(all_records)} 条记录")
         
         monthly_stats = {}
@@ -3225,19 +3233,18 @@ async def admin_daily_stats(
     request: Request,
     payload: dict = Depends(verify_admin_token)
 ):
-    """获取指定月份的每日统计"""
+    """获取指定月份的每日统计。?fresh=1 时强制从数据库重新加载。"""
     try:
         params = dict(request.query_params)
+        force_refresh = params.get("fresh") == "1"
         year = int(params.get("year", datetime.now(LOCAL_TZ).year))
         month = int(params.get("month", datetime.now(LOCAL_TZ).month))
-        
         month_start = datetime(year, month, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
         if month == 12:
             month_end = datetime(year + 1, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
         else:
             month_end = datetime(year, month + 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
-        
-        all_records = get_records_cached()
+        all_records = get_records_cached(force_refresh=force_refresh)
         month_records = filter_records_by_local_range(all_records, month_start, month_end)
         
         daily_stats = {}
