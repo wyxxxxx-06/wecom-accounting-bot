@@ -2296,10 +2296,11 @@
                     // 静默重试
                     setTimeout(() => loadMonthlyStats(retryCount + 1), 1000 * (retryCount + 1));
                 } else {
-                    // 显示错误信息，但不阻止用户操作
+                    // 显示错误信息
                     contentDiv.innerHTML = `
                         <div style="text-align: center; padding: 40px;">
-                            <div style="color: #e74c3c; margin-bottom: 15px;">❌ 加载失败，请刷新页面重试</div>
+                            <div style="color: #e74c3c; margin-bottom: 15px;">❌ 加载失败</div>
+                            <div style="color: #666; margin-bottom: 15px; font-size: 12px;">错误: ${e.message || '未知错误'}</div>
                             <button class="btn" onclick="loadMonthlyStats()" style="width: auto; padding: 10px 24px;">重试</button>
                         </div>
                     `;
