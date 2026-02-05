@@ -647,6 +647,31 @@ def list_debts():
         return []
 
 
+def list_debts_all(include_paid: bool = False):
+    """列出外债（管理后台用，可选含已还清）"""
+    try:
+        supabase = get_supabase_client()
+        query = supabase.table("debts").select("*").order("updated_at", desc=True)
+        if not include_paid:
+            query = query.eq("status", "active")
+        result = query.execute()
+        return result.data or []
+    except Exception as e:
+        print(f"外债列表错误: {str(e)[:100]}")
+        return []
+
+
+def delete_debt(name: str):
+    """删除/清空某条外债记录"""
+    try:
+        supabase = get_supabase_client()
+        supabase.table("debts").delete().eq("name", name).execute()
+        return True
+    except Exception as e:
+        print(f"外债删除错误: {str(e)[:100]}")
+        return False
+
+
 def get_subscription(openid: str, report_type: str):
     """获取订阅记录"""
     try:
@@ -854,12 +879,15 @@ def build_category_pick_prompt(description: str, amount: float, categories: list
 
 
 def parse_record_text(text: str) -> dict:
-    """解析记账文本，返回 dict 或 unknown"""
+    """解析记账文本，支持多种写法：早餐8块、15块咖啡、打车 22、买菜 30 西红柿 等"""
     text = text.strip()
-    text = re.sub(r'(\d+(?:\.\d+)?)(块钱|块|元|rmb|RMB)', r'\1', text)
+    # 先统一去掉金额后的 块/元/块钱（保留数字）
+    text_norm = re.sub(r'(\d+(?:\.\d+)?)\s*(块钱|块|元|rmb|RMB)\s*', r'\1 ', text)
+    text_norm = re.sub(r'(\d+(?:\.\d+)?)(块钱|块|元|rmb|RMB)(?=\D|$)', r'\1', text_norm)
+    text_norm = text_norm.strip()
 
-    # 分类 描述 金额（手动分类优先）
-    explicit_match = re.match(r'^(\S+)\s+(.+?)\s+(\d+(?:\.\d+)?)$', text)
+    # 分类 描述 金额（三部分，手动分类）
+    explicit_match = re.match(r'^(\S+)\s+(.+?)\s+(\d+(?:\.\d+)?)\s*$', text_norm)
     if explicit_match:
         category, desc, amount = explicit_match.groups()
         return {
@@ -870,8 +898,25 @@ def parse_record_text(text: str) -> dict:
             "explicit_category": True
         }
 
-    # 描述 金额（按描述自动分组）
-    simple_match = re.match(r'^(\S+)\s+(\d+(?:\.\d+)?)$', text)
+    # 描述 金额 [备注]（如：买菜 30 西红柿）
+    desc_amount_note = re.match(r'^(.+?)\s+(\d+(?:\.\d+)?)\s*(.*)$', text_norm)
+    if desc_amount_note:
+        desc, amount, extra = desc_amount_note.groups()
+        desc = desc.strip()
+        extra = extra.strip()
+        amount = float(amount)
+        if desc and not re.match(r'^\d+(?:\.\d+)?$', desc):  # 描述不是纯数字
+            description = (desc + " " + extra) if extra else desc
+            return {
+                "type": "record",
+                "amount": amount,
+                "description": description.strip(),
+                "category": desc.split()[0] if desc else "",
+                "explicit_category": False
+            }
+
+    # 描述 金额（两段，无备注）
+    simple_match = re.match(r'^(\S+)\s+(\d+(?:\.\d+)?)\s*$', text_norm)
     if simple_match:
         desc, amount = simple_match.groups()
         return {
@@ -882,8 +927,20 @@ def parse_record_text(text: str) -> dict:
             "explicit_category": False
         }
 
-    # 描述*数量 金额（数量模式）
-    qty_match = re.match(r'^(\S+)[\*\sxX](\d+)\s+(\d+(?:\.\d+)?)$', text)
+    # 金额 描述（如：15 咖啡、8块 早餐）
+    amount_desc = re.match(r'^(\d+(?:\.\d+)?)\s+(.+)$', text_norm)
+    if amount_desc:
+        amount, desc = amount_desc.groups()
+        return {
+            "type": "record",
+            "amount": float(amount),
+            "description": desc.strip(),
+            "category": desc.strip(),
+            "explicit_category": False
+        }
+
+    # 描述*数量 金额
+    qty_match = re.match(r'^(\S+)[\*\sxX](\d+)\s+(\d+(?:\.\d+)?)$', text_norm)
     if qty_match:
         desc, qty, amount = qty_match.groups()
         total = float(qty) * float(amount)
@@ -895,45 +952,28 @@ def parse_record_text(text: str) -> dict:
             "explicit_category": False
         }
 
-    # 记账：尝试解析金额
-    patterns = [
-        r'^(.+?)\s+(\d+(?:\.\d+)?)\s*(.*)$',  # 描述 金额 [分类]
-        r'^(\d+(?:\.\d+)?)\s+(.+?)$',          # 金额 描述
-        r'^(.+?)(\d+(?:\.\d+)?)$',             # 描述金额（无空格）
-        r'^(\d+(?:\.\d+)?)(.+?)$',             # 金额描述（无空格）
-    ]
-
-    for i, pattern in enumerate(patterns):
-        match = re.match(pattern, text)
-        if match:
-            groups = match.groups()
-            if i == 0:  # 描述 金额 [分类]
-                desc, amount, extra = groups
-                amount = float(amount)
-                category = extra.strip() if extra.strip() else desc.strip()
-                explicit_category = bool(extra.strip())
-            elif i == 1:  # 金额 描述
-                amount, desc = groups
-                amount = float(amount)
-                category = desc.strip()
-                explicit_category = False
-            elif i == 2:  # 描述金额
-                desc, amount = groups
-                amount = float(amount)
-                category = desc.strip()
-                explicit_category = False
-            else:  # 金额描述
-                amount, desc = groups
-                amount = float(amount)
-                category = desc.strip()
-                explicit_category = False
-
+    # 无空格：描述+金额 或 金额+描述（如 早餐8、15咖啡）
+    no_space_desc_amount = re.match(r'^(.+?)(\d+(?:\.\d+)?)\s*$', text_norm)
+    if no_space_desc_amount:
+        desc, amount = no_space_desc_amount.groups()
+        if desc and not re.match(r'^\d+(?:\.\d+)?$', desc):
             return {
                 "type": "record",
-                "amount": amount,
+                "amount": float(amount),
                 "description": desc.strip(),
-                "category": category,
-                "explicit_category": explicit_category
+                "category": desc.strip(),
+                "explicit_category": False
+            }
+    no_space_amount_desc = re.match(r'^(\d+(?:\.\d+)?)(.+)$', text_norm)
+    if no_space_amount_desc:
+        amount, desc = no_space_amount_desc.groups()
+        if desc.strip():
+            return {
+                "type": "record",
+                "amount": float(amount),
+                "description": desc.strip(),
+                "category": desc.strip(),
+                "explicit_category": False
             }
 
     return {"type": "unknown"}
@@ -997,6 +1037,24 @@ def parse_message(content: str) -> dict:
         if parsed["type"] == "record":
             return parsed
         return {"type": "unknown"}
+
+    # 记一笔 分类 [金额] [备注]（如：记一笔 早餐、记一笔 打车 22、记一笔 买菜 30 西红柿）
+    jiyibi_match = re.match(r'^记一笔\s+(\S+)(?:\s+(\d+(?:\.\d+)?))?\s*(.*)$', content)
+    if jiyibi_match:
+        category_part = jiyibi_match.group(1).strip()
+        amount_part = jiyibi_match.group(2)
+        note_part = (jiyibi_match.group(3) or "").strip()
+        if amount_part:
+            amount = float(amount_part)
+            description = (category_part + " " + note_part).strip() if note_part else category_part
+            return {
+                "type": "record",
+                "amount": amount,
+                "description": description,
+                "category": category_part,
+                "explicit_category": False
+            }
+        return {"type": "record_need_amount", "category": category_part}
 
     # 补记（昨天/日期）
     backfill_match = re.match(r'^补记\s+(\S+)\s+(.+)$', content)
@@ -1928,6 +1986,9 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             return f"🌐 管理后台\n\n点击链接进入：\n{PUBLIC_BASE_URL}/api/admin\n\n💡 首次使用需要输入管理密码"
         else:
             return "❌ 管理后台链接未配置，请联系管理员设置 PUBLIC_BASE_URL"
+
+    elif parsed["type"] == "record_need_amount":
+        return f"请补金额，例如：记一笔 {parsed['category']} 15"
     
     elif parsed["type"] == "record":
         try:
@@ -3142,6 +3203,86 @@ async def admin_rename_category(
             return {"success": False, "error": result.get("error", "重命名失败")}
     except Exception as e:
         print(f"重命名分类错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/debts")
+async def admin_list_debts(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """外债列表（含已还清可选）"""
+    try:
+        include_paid = request.query_params.get("all") == "1"
+        debts = list_debts_all(include_paid=include_paid)
+        total = sum(float(d.get("amount", 0)) for d in debts if d.get("status") == "active")
+        return {"success": True, "debts": debts, "total_active": total}
+    except Exception as e:
+        print(f"外债列表错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/admin/debts")
+async def admin_add_debt(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """新增或累加外债"""
+    try:
+        data = await request.json()
+        name = (data.get("name") or "").strip()
+        amount = float(data.get("amount", 0))
+        note = (data.get("note") or "").strip()
+        if not name:
+            return {"success": False, "error": "请输入对方姓名/称呼"}
+        if amount <= 0:
+            return {"success": False, "error": "金额需大于 0"}
+        new_amount = add_debt(name, amount, note)
+        return {"success": True, "total": new_amount}
+    except Exception as e:
+        print(f"外债添加错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/admin/debts/repay")
+async def admin_repay_debt(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """还款"""
+    try:
+        data = await request.json()
+        name = (data.get("name") or "").strip()
+        amount = float(data.get("amount", 0))
+        if not name:
+            return {"success": False, "error": "请输入对方姓名"}
+        if amount <= 0:
+            return {"success": False, "error": "金额需大于 0"}
+        result = repay_debt(name, amount)
+        if result.get("error") == "not_found":
+            return {"success": False, "error": f"未找到欠 {name} 的记录"}
+        if result.get("error") == "overpay":
+            return {"success": False, "error": f"当前欠 {name} {result.get('balance', 0):.2f} 元，还款金额超出"}
+        return {"success": True, "balance": result.get("balance", 0), "status": result.get("status", "active")}
+    except Exception as e:
+        print(f"外债还款错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.delete("/api/admin/debts")
+async def admin_delete_debt(
+    request: Request,
+    payload: dict = Depends(verify_admin_token)
+):
+    """删除外债记录（整条清空）"""
+    try:
+        name = (request.query_params.get("name") or "").strip()
+        if not name:
+            return {"success": False, "error": "请指定 name"}
+        ok = delete_debt(name)
+        return {"success": ok}
+    except Exception as e:
+        print(f"外债删除错误: {str(e)[:100]}")
         return {"success": False, "error": str(e)}
 
 
