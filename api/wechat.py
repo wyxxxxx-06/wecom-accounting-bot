@@ -1738,6 +1738,19 @@ def batch_rename_categories(renames: list) -> dict:
     return {"success": success, "failed": failed}
 
 
+def clear_category_aliases(category_name: str) -> bool:
+    """清除某分类下的所有别名（该分类无记录时用于「删除分类」）"""
+    try:
+        supabase = get_supabase_client()
+        supabase.table("category_aliases").delete().eq("category", category_name.strip()).execute()
+        CATEGORY_ALIAS_CACHE["value"] = {}
+        CATEGORY_ALIAS_CACHE["expires_at"] = 0
+        return True
+    except Exception as e:
+        print(f"清除分类别名错误: {str(e)[:100]}")
+        return False
+
+
 def add_months(dt: datetime, months: int) -> datetime:
     """按月偏移"""
     year = dt.year + (dt.month - 1 + months) // 12
@@ -3208,7 +3221,7 @@ async def admin_rename_category(
     request: Request,
     payload: dict = Depends(verify_admin_token)
 ):
-    """重命名分类"""
+    """重命名分类（或删除时转移：将该分类下记录与别名合并到目标）"""
     try:
         data = await request.json()
         old_name = data.get("old_name", "")
@@ -3221,6 +3234,21 @@ async def admin_rename_category(
             return {"success": False, "error": result.get("error", "重命名失败")}
     except Exception as e:
         print(f"重命名分类错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/admin/categories/clear_aliases")
+async def admin_clear_category_aliases(request: Request, payload: dict = Depends(verify_admin_token)):
+    """删除分类（仅清除该分类的别名，用于该分类下无记录时）"""
+    try:
+        data = await request.json()
+        name = (data.get("name") or "").strip()
+        if not name:
+            return {"success": False, "error": "请指定分类名"}
+        ok = clear_category_aliases(name)
+        return {"success": ok}
+    except Exception as e:
+        print(f"清除分类别名错误: {str(e)[:100]}")
         return {"success": False, "error": str(e)}
 
 
