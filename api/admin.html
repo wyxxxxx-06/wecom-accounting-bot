@@ -770,33 +770,54 @@
         /* 移动端优化 */
         @media (max-width: 768px) {
             .main-container {
-                padding: 15px;
+                padding: 10px;
             }
             .header {
                 flex-direction: column;
-                gap: 15px;
+                gap: 10px;
                 text-align: center;
+                padding: 15px;
             }
             .header h1 {
-                font-size: 20px;
+                font-size: 18px;
             }
             .nav {
                 flex-wrap: wrap;
-                gap: 8px;
+                gap: 6px;
+                padding: 10px 15px;
+                justify-content: center;
             }
             .nav-btn {
-                font-size: 12px;
-                padding: 8px 12px;
+                font-size: 11px;
+                padding: 8px 10px;
+                flex: 0 0 auto;
+            }
+            .content {
+                padding: 15px;
             }
             .stats-grid {
                 grid-template-columns: 1fr 1fr;
-                gap: 15px;
+                gap: 10px;
+            }
+            .stat-card {
+                padding: 15px;
             }
             .stat-card .value {
-                font-size: 24px;
+                font-size: 20px;
+            }
+            .stat-card h3 {
+                font-size: 11px;
             }
             .table-container {
                 overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+            table {
+                min-width: 600px;
+            }
+            th, td {
+                padding: 10px 8px;
+                font-size: 13px;
             }
             .search-box {
                 flex-direction: column;
@@ -804,11 +825,34 @@
             .search-box input, .search-box select {
                 width: 100% !important;
             }
+            .table-header {
+                padding: 15px;
+                flex-direction: column;
+                gap: 10px;
+            }
             .month-grid {
                 grid-template-columns: 1fr 1fr;
             }
             .day-grid {
-                grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+                grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+            }
+            .modal-content {
+                width: 95%;
+                margin: 10px;
+                padding: 20px;
+            }
+            .chart-wrapper {
+                height: 300px;
+            }
+            .upload-area {
+                padding: 30px 20px;
+            }
+            .pagination {
+                flex-wrap: wrap;
+            }
+            .pagination button {
+                padding: 8px 12px;
+                font-size: 13px;
             }
             .category-stats {
                 padding: 15px;
@@ -883,12 +927,14 @@
             <button class="btn" onclick="logout()">退出登录</button>
         </div>
         <div class="nav">
-            <button class="nav-btn active" onclick="showSection('overview')">📈 数据概览</button>
-            <button class="nav-btn" onclick="showSection('records')">📝 记录列表</button>
-            <button class="nav-btn" onclick="showSection('table_stats')">📋 表格统计</button>
-            <button class="nav-btn" onclick="showSection('stats')">📊 图形统计</button>
-            <button class="nav-btn" onclick="showSection('import')">📤 批量导入</button>
-            <button class="nav-btn" onclick="showSection('categories')">🏷️ 分类管理</button>
+            <button class="nav-btn active" onclick="showSection('overview')">📈 概览</button>
+            <button class="nav-btn" onclick="showSection('records')">📝 记录</button>
+            <button class="nav-btn" onclick="showSection('table_stats')">📋 统计</button>
+            <button class="nav-btn" onclick="showSection('stats')">📊 图表</button>
+            <button class="nav-btn" onclick="showSection('import')">📤 导入</button>
+            <button class="nav-btn" onclick="showSection('categories')">🏷️ 分类</button>
+            <button class="nav-btn" onclick="showSection('settings')">⚙️ 设置</button>
+            <button class="nav-btn" onclick="showSection('help')">❓ 说明</button>
         </div>
         <div class="content">
             <!-- 数据概览 -->
@@ -1115,6 +1161,87 @@
                     </table>
                 </div>
             </div>
+
+            <!-- 设置页面 -->
+            <div class="section" id="settings">
+                <div class="table-container">
+                    <div class="table-header">
+                        <h3 style="margin: 0; color: #333; font-size: 18px;">⚙️ 系统设置</h3>
+                    </div>
+                    <div style="padding: 30px;">
+                        <div style="margin-bottom: 30px;">
+                            <h4 style="margin-bottom: 15px; color: #333;">自定义帮助回复</h4>
+                            <p style="color: #666; margin-bottom: 15px; font-size: 14px;">
+                                设置用户发送"帮助"时的回复内容。留空则使用默认帮助文本。
+                            </p>
+                            <textarea id="customHelpText" placeholder="输入自定义帮助内容，支持换行..." style="width: 100%; height: 300px; padding: 15px; border: 2px solid #e0e0e0; border-radius: 10px; font-size: 14px; font-family: inherit; resize: vertical;"></textarea>
+                            <div style="margin-top: 15px; display: flex; gap: 10px;">
+                                <button class="btn" onclick="saveCustomHelp()" style="width: auto; padding: 12px 30px;">保存设置</button>
+                                <button class="btn" onclick="resetCustomHelp()" style="width: auto; padding: 12px 30px; background: #6c757d;">恢复默认</button>
+                            </div>
+                        </div>
+                        <div style="margin-top: 30px; padding: 20px; background: #f8f9fa; border-radius: 10px;">
+                            <h4 style="margin-bottom: 10px; color: #333;">💡 提示</h4>
+                            <ul style="color: #666; font-size: 14px; line-height: 1.8; padding-left: 20px;">
+                                <li>用户在微信发送"帮助"、"help"或"?"会收到此回复</li>
+                                <li>支持使用换行和emoji表情</li>
+                                <li>建议保持简洁，微信消息长度有限制</li>
+                                <li>发送"网页"可获取管理后台链接</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 使用说明页面 -->
+            <div class="section" id="help">
+                <div class="table-container">
+                    <div class="table-header">
+                        <h3 style="margin: 0; color: #333; font-size: 18px;">❓ 使用说明</h3>
+                    </div>
+                    <div style="padding: 30px; line-height: 1.8;">
+                        <div style="margin-bottom: 30px;">
+                            <h4 style="color: #667eea; margin-bottom: 15px;">📱 微信端指令</h4>
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <tr style="background: #f8f9fa;">
+                                    <th style="padding: 12px; text-align: left; border: 1px solid #e0e0e0;">功能</th>
+                                    <th style="padding: 12px; text-align: left; border: 1px solid #e0e0e0;">指令示例</th>
+                                </tr>
+                                <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">记账</td><td style="padding: 12px; border: 1px solid #e0e0e0;">午餐 35 / 打车 50 交通</td></tr>
+                                <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">查询统计</td><td style="padding: 12px; border: 1px solid #e0e0e0;">今日 / 本周 / 本月</td></tr>
+                                <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">查看明细</td><td style="padding: 12px; border: 1px solid #e0e0e0;">明细 / 明细 昨天</td></tr>
+                                <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">修改记录</td><td style="padding: 12px; border: 1px solid #e0e0e0;">改 1 描述 金额</td></tr>
+                                <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">删除记录</td><td style="padding: 12px; border: 1px solid #e0e0e0;">删 2 / 删 1-4</td></tr>
+                                <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">补记</td><td style="padding: 12px; border: 1px solid #e0e0e0;">补记 昨天 买菜 30</td></tr>
+                                <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">导出</td><td style="padding: 12px; border: 1px solid #e0e0e0;">导出 本月 / 导出 全部</td></tr>
+                                <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">管理后台</td><td style="padding: 12px; border: 1px solid #e0e0e0;">网页</td></tr>
+                                <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">帮助</td><td style="padding: 12px; border: 1px solid #e0e0e0;">帮助 / help / ?</td></tr>
+                            </table>
+                        </div>
+                        <div style="margin-bottom: 30px;">
+                            <h4 style="color: #667eea; margin-bottom: 15px;">🖥️ 网页端功能</h4>
+                            <ul style="padding-left: 20px; color: #555;">
+                                <li><b>数据概览</b>：查看今日/本周/本月支出统计</li>
+                                <li><b>记录列表</b>：查询、筛选、编辑、删除记录</li>
+                                <li><b>表格统计</b>：按年/月/日查看支出明细</li>
+                                <li><b>图形统计</b>：分类占比图、趋势图</li>
+                                <li><b>批量导入</b>：上传Excel批量修改记录</li>
+                                <li><b>分类管理</b>：查看和重命名分类</li>
+                                <li><b>设置</b>：自定义帮助回复内容</li>
+                            </ul>
+                        </div>
+                        <div style="padding: 20px; background: linear-gradient(135deg, #667eea20 0%, #764ba220 100%); border-radius: 10px;">
+                            <h4 style="color: #667eea; margin-bottom: 10px;">💡 小技巧</h4>
+                            <ul style="padding-left: 20px; color: #555;">
+                                <li>记账时先写分类再写描述，可以更准确分类</li>
+                                <li>系统会自动学习你的记账习惯</li>
+                                <li>多人可以共同使用同一个公众号记账</li>
+                                <li>定期导出备份数据以防丢失</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1196,6 +1323,48 @@
             else if (section === 'table_stats') loadMonthlyStats();
             else if (section === 'stats') loadStats();
             else if (section === 'categories') loadCategories();
+            else if (section === 'settings') loadSettings();
+        }
+
+        // 加载设置
+        async function loadSettings() {
+            try {
+                const response = await fetchWithAuth('/api/admin/settings');
+                const data = await response.json();
+                if (data.success && data.settings) {
+                    document.getElementById('customHelpText').value = data.settings.custom_help_text || '';
+                }
+            } catch (e) {
+                console.error('加载设置失败:', e);
+            }
+        }
+
+        // 保存自定义帮助
+        async function saveCustomHelp() {
+            const text = document.getElementById('customHelpText').value;
+            try {
+                const response = await fetchWithAuth('/api/admin/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: 'custom_help_text', value: text })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    alert('✅ 保存成功！');
+                } else {
+                    alert('❌ 保存失败: ' + (data.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('❌ 保存失败: ' + e.message);
+            }
+        }
+
+        // 重置自定义帮助
+        function resetCustomHelp() {
+            if (confirm('确定要恢复默认帮助内容吗？')) {
+                document.getElementById('customHelpText').value = '';
+                saveCustomHelp();
+            }
         }
 
         // 通用fetch函数，带token刷新、错误处理和重试机制
