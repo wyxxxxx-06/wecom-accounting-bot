@@ -76,6 +76,9 @@ CATEGORY_ALIAS_CACHE = {"value": {}, "expires_at": 0}
 # 分类列表缓存（全局）
 CATEGORY_LIST_CACHE = {"value": [], "expires_at": 0}
 CATEGORY_LIST_CACHE_TTL = 600  # 分类列表缓存10分钟
+# 记录缓存（用于管理后台统计）
+RECORDS_CACHE = {"value": [], "expires_at": 0, "count": 0}
+RECORDS_CACHE_TTL = 60  # 记录缓存1分钟（频繁变动所以时间短）
 
 # ============ 数据库操作（使用 REST API）============
 def get_supabase_client():
@@ -229,6 +232,7 @@ def add_record(openid: str, nickname: str, amount: float, category: str, descrip
             "created_at": created_at_value
         }
         result = supabase.table("records").insert(data).execute()
+        invalidate_records_cache()  # 清除缓存
         return result
     except Exception as e:
         print(f"数据库错误: {str(e)[:100]}")
@@ -256,6 +260,35 @@ def get_records(start_date: datetime = None, end_date: datetime = None, category
     except Exception as e:
         print(f"查询错误: {str(e)[:100]}")
         return []
+
+
+def get_records_cached(max_records: int = 5000):
+    """获取所有记录（带缓存，用于管理后台统计）"""
+    now = int(time.time())
+    # 检查缓存
+    if RECORDS_CACHE["value"] and now < RECORDS_CACHE["expires_at"]:
+        return RECORDS_CACHE["value"]
+    try:
+        supabase = get_supabase_client()
+        query = supabase.table("records").select("*").order("created_at", desc=True).limit(max_records)
+        result = query.execute()
+        records = result.data
+        # 更新缓存
+        RECORDS_CACHE["value"] = records
+        RECORDS_CACHE["expires_at"] = now + RECORDS_CACHE_TTL
+        RECORDS_CACHE["count"] = len(records)
+        return records
+    except Exception as e:
+        print(f"缓存查询错误: {str(e)[:100]}")
+        # 如果有旧缓存，返回旧缓存
+        if RECORDS_CACHE["value"]:
+            return RECORDS_CACHE["value"]
+        return []
+
+
+def invalidate_records_cache():
+    """清除记录缓存（记录变动后调用）"""
+    RECORDS_CACHE["expires_at"] = 0
 
 
 def filter_records_by_local_range(records: list, start_date: datetime, end_date: datetime) -> list:
@@ -398,13 +431,17 @@ def update_record(record_id: int, amount: float, category: str, description: str
         "category": category,
         "description": description
     }
-    return supabase.table("records").update(data).eq("id", record_id).execute()
+    result = supabase.table("records").update(data).eq("id", record_id).execute()
+    invalidate_records_cache()  # 清除缓存
+    return result
 
 
 def delete_record(record_id: int):
     """删除记账记录"""
     supabase = get_supabase_client()
-    return supabase.table("records").delete().eq("id", record_id).execute()
+    result = supabase.table("records").delete().eq("id", record_id).execute()
+    invalidate_records_cache()  # 清除缓存
+    return result
 
 
 def archive_deleted_record(record: dict, deleted_by: str):
@@ -2750,8 +2787,8 @@ async def admin_overview(payload: dict = Depends(verify_admin_token)):
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         
-        # 总记录数
-        all_records = get_records()
+        # 总记录数（使用缓存）
+        all_records = get_records_cached()
         total_count = len(all_records)
         
         # 今日记录
@@ -2931,7 +2968,7 @@ async def admin_stats(
         date = params.get("date", "")
         week = params.get("week", "")
         
-        all_records = get_records()
+        all_records = get_records_cached()
         
         # 根据筛选条件过滤记录
         if date:
@@ -3142,7 +3179,7 @@ async def admin_monthly_stats(payload: dict = Depends(verify_admin_token)):
     try:
         now = datetime.now(LOCAL_TZ)
         year = now.year
-        all_records = get_records()
+        all_records = get_records_cached()
         
         monthly_stats = {}
         for month in range(1, 13):
@@ -3189,7 +3226,7 @@ async def admin_daily_stats(
         else:
             month_end = datetime(year, month + 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
         
-        all_records = get_records()
+        all_records = get_records_cached()
         month_records = filter_records_by_local_range(all_records, month_start, month_end)
         
         daily_stats = {}
@@ -3243,7 +3280,7 @@ async def admin_date_records(
         date_start = date_obj
         date_end = date_obj + timedelta(days=1)
         
-        all_records = get_records()
+        all_records = get_records_cached()
         date_records = filter_records_by_local_range(all_records, date_start, date_end)
         
         formatted = []
@@ -3288,7 +3325,7 @@ async def admin_month_category_stats(
         else:
             month_end = datetime(year, month + 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
         
-        all_records = get_records()
+        all_records = get_records_cached()
         month_records = filter_records_by_local_range(all_records, month_start, month_end)
         
         # 按分类统计
@@ -3341,7 +3378,7 @@ async def admin_year_category_stats(
         year_start = datetime(year, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
         year_end = datetime(year + 1, 1, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
         
-        all_records = get_records()
+        all_records = get_records_cached()
         year_records = filter_records_by_local_range(all_records, year_start, year_end)
         
         # 按分类统计
@@ -3393,7 +3430,7 @@ async def admin_date_category_stats(
         date_start = date_obj
         date_end = date_obj + timedelta(days=1)
         
-        all_records = get_records()
+        all_records = get_records_cached()
         date_records = filter_records_by_local_range(all_records, date_start, date_end)
         
         # 按分类统计
@@ -3444,7 +3481,7 @@ async def admin_category_records(
         if not category:
             return {"success": False, "error": "缺少分类参数"}
         
-        all_records = get_records()
+        all_records = get_records_cached()
         
         # 根据时间范围筛选
         if date:
@@ -3572,7 +3609,7 @@ async def admin_export(
         date_from = params.get("date_from", "")
         date_to = params.get("date_to", "")
         
-        all_records = get_records()
+        all_records = get_records_cached()
         
         # 根据period筛选记录
         if period == "all":
@@ -3629,7 +3666,7 @@ async def admin_backup(
 ):
     """数据备份（导出所有数据）"""
     try:
-        all_records = get_records()
+        all_records = get_records_cached()
         excel_bytes = build_export_excel_bytes(all_records)
         
         now = datetime.now(LOCAL_TZ)
@@ -3656,7 +3693,7 @@ async def admin_comparison(
         type = params.get("type", "month")  # month, year
         
         now = datetime.now(LOCAL_TZ)
-        all_records = get_records()
+        all_records = get_records_cached()
         
         if type == "month":
             # 本月 vs 上月
@@ -3735,7 +3772,7 @@ async def admin_weekly_stats(payload: dict = Depends(verify_admin_token)):
         week_start = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
         week_end = now + timedelta(days=1)
         
-        all_records = get_records()
+        all_records = get_records_cached()
         week_records = filter_records_by_local_range(all_records, week_start, week_end)
         
         # 按天统计
@@ -3799,7 +3836,7 @@ async def admin_quarterly_stats(
             else:
                 quarter_end = datetime(year, month_start + 3, 1, 0, 0, 0, tzinfo=LOCAL_TZ)
             
-            all_records = get_records()
+            all_records = get_records_cached()
             quarter_records = filter_records_by_local_range(all_records, quarter_start, quarter_end)
             
             quarters.append({
@@ -3831,7 +3868,7 @@ async def admin_avg_daily(
         period = params.get("period", "month")  # month, year, all
         
         now = datetime.now(LOCAL_TZ)
-        all_records = get_records()
+        all_records = get_records_cached()
         
         if period == "month":
             month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
