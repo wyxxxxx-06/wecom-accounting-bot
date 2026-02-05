@@ -759,6 +759,20 @@
         .btn-secondary:hover {
             background: #5a6268;
         }
+        .category-tree-display {
+            max-height: 320px;
+            overflow-y: auto;
+            padding: 12px;
+            background: #fff;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+        }
+        .tree-node { margin: 6px 0; }
+        .tree-node-l1 { font-weight: 600; color: #333; padding: 6px 10px; background: #e8eaf6; border-radius: 8px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+        .tree-node-l2 { margin-left: 24px; padding: 4px 10px; color: #555; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
+        .tree-node-l3 { margin-left: 48px; padding: 2px 8px; font-size: 13px; color: #666; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+        .tree-node-actions { display: flex; gap: 6px; flex-shrink: 0; }
+        .tree-node-actions .btn { padding: 4px 10px; font-size: 12px; }
         #uploadResult {
             margin-top: 25px;
             padding: 15px;
@@ -1158,9 +1172,34 @@
             <!-- 分类管理 -->
             <div class="section" id="categories">
                 <div class="table-container">
+                    <!-- 三级类目（仅允许预设类目） -->
+                    <div class="category-tree-card" style="margin-bottom: 24px; padding: 20px; background: #f8f9fa; border-radius: 12px; border: 1px solid #e9ecef;">
+                        <h4 style="margin: 0 0 12px 0; color: #333; font-size: 15px;">📂 三级类目</h4>
+                        <p style="margin: 0 0 12px 0; color: #666; font-size: 13px;">启用后，记录只能选择下面设置的类目（一级 / 一级|二级 / 一级|二级|三级），不会出现未设置的类目。</p>
+                        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                <input type="checkbox" id="categoryTreeEnabled" onchange="toggleCategoryTree()">
+                                <span>启用三级类目（仅允许预设类目）</span>
+                            </label>
+                            <button class="btn" id="saveCategoryTreeBtn" onclick="saveCategoryTree()" style="width: auto; padding: 8px 16px; display: none;">保存类目树</button>
+                        </div>
+                        <div id="categoryTreeWrap" style="display: none;">
+                            <div id="categoryTreeDisplay" class="category-tree-display"></div>
+                            <div style="margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px;">
+                                <input type="text" id="newL1" placeholder="新增一级类目" style="width: 140px; padding: 8px 12px; border: 2px solid #e0e0e0; border-radius: 8px;">
+                                <button class="btn" onclick="addTreeL1()" style="width: auto; padding: 8px 16px;">添加一级</button>
+                                <span style="color: #999; font-size: 13px;">在下方节点可添加二级、三级</span>
+                            </div>
+                        </div>
+                        <div id="mergeLegacyWrap" style="display: none; margin-top: 20px; padding-top: 16px; border-top: 1px solid #e0e0e0;">
+                            <h5 style="margin: 0 0 10px 0; color: #333; font-size: 14px;">合并历史分类到新类目</h5>
+                            <p style="margin: 0 0 10px 0; color: #666; font-size: 13px;">以下为当前记录中尚未在类目树中的分类，可合并到上面设置的路径（不丢历史数据）。</p>
+                            <div id="mergeLegacyList"></div>
+                        </div>
+                    </div>
                     <div class="table-header" style="flex-wrap: wrap; gap: 15px;">
                         <h3 style="margin: 0; color: #333; font-size: 18px;">分类列表</h3>
-                        <button class="btn" onclick="showAddCategoryModal()" style="width: auto; padding: 10px 24px;">新增分类</button>
+                        <button class="btn" onclick="showAddCategoryModal()" style="width: auto; padding: 10px 24px;" id="addCategoryBtn">新增分类</button>
                         <button class="btn" onclick="downloadCategoryExcel()" style="width: auto; padding: 10px 24px; background: #28a745;">下载分类表</button>
                         <span style="display: inline-flex; align-items: center; gap: 8px;">
                             <input type="file" id="categoryFileInput" accept=".xlsx" style="display:none" onchange="uploadCategoryExcel(event)">
@@ -1343,7 +1382,17 @@
             <input type="time" id="editTime" placeholder="时间" required>
             <input type="text" id="editDescription" placeholder="描述" required>
             <input type="number" step="0.01" id="editAmount" placeholder="金额" required>
-            <select id="editCategory" class="category-select" required style="width: 100%;"></select>
+            <div id="editCategorySingleWrap">
+                <select id="editCategory" class="category-select" style="width: 100%;"></select>
+            </div>
+            <div id="editCategoryCascadeWrap" style="display: none;">
+                <label style="font-size: 12px; color: #666;">一级</label>
+                <select id="editCategoryL1" class="category-select" style="width: 100%; margin-bottom: 8px;"></select>
+                <label style="font-size: 12px; color: #666;">二级（选填）</label>
+                <select id="editCategoryL2" class="category-select" style="width: 100%; margin-bottom: 8px;"><option value="">— 不选 —</option></select>
+                <label style="font-size: 12px; color: #666;">三级（选填）</label>
+                <select id="editCategoryL3" class="category-select" style="width: 100%;"><option value="">— 不选 —</option></select>
+            </div>
             <div class="btn-group">
                 <button class="btn" onclick="saveRecord()">保存</button>
                 <button class="btn btn-secondary" onclick="closeEditModal()">取消</button>
@@ -1411,7 +1460,7 @@
             else if (section === 'records') loadRecords();
             else if (section === 'table_stats') setTimeout(function() { loadMonthlyStats(0, true); }, 0);
             else if (section === 'stats') loadStats();
-            else if (section === 'categories') loadCategories();
+            else if (section === 'categories') { loadCategoryTree(); loadCategories(); }
             else if (section === 'debts') loadDebts();
             else if (section === 'settings') loadSettings();
         }
@@ -1783,7 +1832,7 @@
                                     <td>${r.time}</td>
                                     <td class="editable" onclick="editRecord(${r.id}, '${r.date}', '${r.time}', '${desc}', ${r.amount}, '${cat}')">${r.description}</td>
                                     <td style="font-weight: 600; color: #e74c3c;">¥${r.amount.toFixed(2)}</td>
-                                    <td class="editable" onclick="editRecord(${r.id}, '${r.date}', '${r.time}', '${desc}', ${r.amount}, '${cat}')">${r.category}</td>
+                                    <td class="editable" onclick="editRecord(${r.id}, '${r.date}', '${r.time}', '${desc}', ${r.amount}, '${cat}')">${(r.category || '').indexOf('|') >= 0 ? (r.category || '').replace(/\|/g, ' > ') : (r.category || '')}</td>
                                     <td>
                                         <button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px; margin-right: 5px;" onclick="editRecord(${r.id}, '${r.date}', '${r.time}', '${desc}', ${r.amount}, '${cat}')">编辑</button>
                                         <button class="btn btn-secondary" style="width: auto; padding: 6px 14px; font-size: 12px;" onclick="deleteRecord(${r.id})">删除</button>
@@ -1831,32 +1880,18 @@
             }
         }
         
-        // 加载分类列表用于筛选和批量改分类下拉
+        // 加载分类列表用于筛选和批量改分类下拉（与 fillCategoryDropdowns 一致，支持三级类目）
         async function loadCategoriesForFilter() {
             try {
                 const response = await fetchWithAuth('/api/admin/categories');
                 const data = await response.json();
-                if (data.success) {
-                    const select = document.getElementById('categoryFilter');
-                    const currentValue = select ? Array.from(select.selectedOptions).map(o => o.value) : [];
-                    if (select) {
-                        select.innerHTML = '<option value="">全部分类</option>';
-                        (data.categories || []).forEach(cat => {
-                            const categoryName = typeof cat === 'string' ? cat : cat.category;
-                            const option = document.createElement('option');
-                            option.value = categoryName;
-                            option.textContent = categoryName;
-                            if (currentValue.includes(categoryName)) option.selected = true;
-                            select.appendChild(option);
-                        });
+                if (data.success && data.categories) {
+                    if (data.tree && data.paths) {
+                        categoryTreeData.tree = data.tree;
+                        categoryTreeData.paths = data.paths;
+                        categoryTreeData.enabled = true;
                     }
-                    var batchSel = document.getElementById('batchCategorySelect');
-                    if (batchSel) {
-                        batchSel.innerHTML = '<option value="">选择分类</option>' + (data.categories || []).map(cat => {
-                            const name = typeof cat === 'string' ? cat : cat.category;
-                            return '<option value="' + (name || '').replace(/"/g, '&quot;') + '">' + (name || '').replace(/</g, '&lt;') + '</option>';
-                        }).join('');
-                    }
+                    fillCategoryDropdowns(data);
                 }
             } catch (e) {
                 console.error('加载分类列表失败:', e);
@@ -2002,27 +2037,64 @@
             }
         }
 
-        // 编辑记录（打开时填充分类下拉）
+        // 编辑记录（打开时填充分类下拉；三级类目时用级联选择）
         async function editRecord(id, date, time, description, amount, category) {
             document.getElementById('editId').value = id;
             document.getElementById('editDate').value = date;
             document.getElementById('editTime').value = time;
             document.getElementById('editDescription').value = description;
             document.getElementById('editAmount').value = amount;
-            var editCatSel = document.getElementById('editCategory');
-            if (editCatSel.options.length <= 1) {
+            var useCascade = categoryTreeData.paths && categoryTreeData.paths.length > 0;
+            if (!useCascade) {
                 try {
-                    var r = await fetchWithAuth('/api/admin/categories');
-                    var d = await r.json();
-                    if (d.success && d.categories && d.categories.length) {
-                        editCatSel.innerHTML = '<option value="">选择分类</option>' + d.categories.map(function(c) {
-                            var name = typeof c === 'string' ? c : c.category;
-                            return '<option value="' + (name||'').replace(/"/g, '&quot;') + '">' + (name||'').replace(/</g, '&lt;') + '</option>';
-                        }).join('');
+                    var rt = await fetchWithAuth('/api/admin/category-tree');
+                    var dt = await rt.json();
+                    if (dt.success && dt.enabled && dt.paths && dt.paths.length > 0) {
+                        categoryTreeData = { tree: dt.tree || {}, paths: dt.paths || [], enabled: true };
+                        useCascade = true;
                     }
                 } catch (e) {}
             }
-            editCatSel.value = category || '';
+            if (useCascade) {
+                document.getElementById('editCategorySingleWrap').style.display = 'none';
+                document.getElementById('editCategoryCascadeWrap').style.display = 'block';
+                var L1 = document.getElementById('editCategoryL1');
+                var L2 = document.getElementById('editCategoryL2');
+                var L3 = document.getElementById('editCategoryL3');
+                var t = categoryTreeData.tree || {};
+                var l1Keys = Object.keys(t).sort();
+                L1.innerHTML = '<option value="">请选一级</option>' + l1Keys.map(function(k) { return '<option value="' + (k||'').replace(/"/g, '&quot;') + '">' + escapeHtml(k) + '</option>'; }).join('');
+                var parts = (category || '').split('|');
+                L1.value = parts[0] || '';
+                if (parts[0] && t[parts[0]]) {
+                    var l2Keys = Object.keys(t[parts[0]]).sort();
+                    L2.innerHTML = '<option value="">— 不选 —</option>' + l2Keys.map(function(k) { return '<option value="' + (k||'').replace(/"/g, '&quot;') + '">' + escapeHtml(k) + '</option>'; }).join('');
+                    L2.value = parts[1] || '';
+                    if (parts[1]) {
+                        var arr = t[parts[0]][parts[1]];
+                        var l3List = Array.isArray(arr) ? arr : (arr ? Object.keys(arr) : []);
+                        L3.innerHTML = '<option value="">— 不选 —</option>' + l3List.map(function(k) { return '<option value="' + (k||'').replace(/"/g, '&quot;') + '">' + escapeHtml(k) + '</option>'; }).join('');
+                        L3.value = parts[2] || '';
+                    } else L3.innerHTML = '<option value="">— 不选 —</option>';
+                } else { L2.innerHTML = '<option value="">— 不选 —</option>'; L3.innerHTML = '<option value="">— 不选 —</option>'; }
+            } else {
+                document.getElementById('editCategorySingleWrap').style.display = 'block';
+                document.getElementById('editCategoryCascadeWrap').style.display = 'none';
+                var editCatSel = document.getElementById('editCategory');
+                if (editCatSel.options.length <= 1) {
+                    try {
+                        var r = await fetchWithAuth('/api/admin/categories');
+                        var d = await r.json();
+                        if (d.success && d.categories) {
+                            editCatSel.innerHTML = '<option value="">选择分类</option>' + (d.categories || []).map(function(c) {
+                                var name = typeof c === 'string' ? c : c.category;
+                                return '<option value="' + (name||'').replace(/"/g, '&quot;') + '">' + (name||'').replace(/</g, '&lt;') + '</option>';
+                            }).join('');
+                        }
+                    } catch (e) {}
+                }
+                editCatSel.value = category || '';
+            }
             document.getElementById('editModal').classList.add('active');
         }
 
@@ -2033,12 +2105,22 @@
         async function saveRecord() {
             const token = sessionStorage.getItem('admin_token');
             const id = document.getElementById('editId').value;
+            var categoryVal = '';
+            if (categoryTreeData.paths && categoryTreeData.paths.length > 0) {
+                var l1 = document.getElementById('editCategoryL1').value;
+                var l2 = document.getElementById('editCategoryL2').value;
+                var l3 = document.getElementById('editCategoryL3').value;
+                if (!l1) { alert('请选择一级类目'); return; }
+                categoryVal = l1 + (l2 ? '|' + l2 : '') + (l3 ? '|' + l3 : '');
+            } else {
+                categoryVal = document.getElementById('editCategory').value;
+            }
             const data = {
                 date: document.getElementById('editDate').value,
                 time: document.getElementById('editTime').value,
                 description: document.getElementById('editDescription').value,
                 amount: parseFloat(document.getElementById('editAmount').value),
-                category: document.getElementById('editCategory').value
+                category: categoryVal
             };
             
             try {
@@ -2414,22 +2496,204 @@
             }
         });
 
+        // 三级类目：缓存的树与路径（供下拉框使用）
+        let categoryTreeData = { tree: {}, paths: [], enabled: false };
+        let categoryTreeDirty = false;
+
+        async function loadCategoryTree() {
+            try {
+                const r = await fetchWithAuth('/api/admin/category-tree');
+                const d = await r.json();
+                if (d.success) {
+                    categoryTreeData = { tree: d.tree || {}, paths: d.paths || [], enabled: !!d.enabled };
+                    const cb = document.getElementById('categoryTreeEnabled');
+                    const wrap = document.getElementById('categoryTreeWrap');
+                    const saveBtn = document.getElementById('saveCategoryTreeBtn');
+                    const mergeWrap = document.getElementById('mergeLegacyWrap');
+                    if (cb) cb.checked = categoryTreeData.enabled;
+                    if (wrap) wrap.style.display = categoryTreeData.enabled ? 'block' : 'none';
+                    if (saveBtn) saveBtn.style.display = categoryTreeData.enabled ? 'inline-block' : 'none';
+                    renderCategoryTreeDom();
+                    if (categoryTreeData.enabled) loadMergeLegacy();
+                    if (mergeWrap) mergeWrap.style.display = categoryTreeData.enabled ? 'block' : 'none';
+                }
+            } catch (e) { console.error('loadCategoryTree', e); }
+        }
+
+        function toggleCategoryTree() {
+            const enabled = document.getElementById('categoryTreeEnabled').checked;
+            document.getElementById('categoryTreeWrap').style.display = enabled ? 'block' : 'none';
+            document.getElementById('saveCategoryTreeBtn').style.display = enabled ? 'inline-block' : 'none';
+            document.getElementById('mergeLegacyWrap').style.display = enabled ? 'block' : 'none';
+            if (enabled) {
+                if (!categoryTreeData.paths || categoryTreeData.paths.length === 0) {
+                    categoryTreeData.tree = {};
+                    categoryTreeData.paths = [];
+                    renderCategoryTreeDom();
+                }
+                loadMergeLegacy();
+            } else {
+                if (confirm('关闭后将允许任意分类名。确定要关闭三级类目吗？')) {
+                    saveCategoryTreeSilent([]);
+                }
+            }
+        }
+
+        function treeToPaths() {
+            const t = categoryTreeData.tree;
+            const paths = [];
+            Object.keys(t || {}).sort().forEach(l1 => {
+                paths.push(l1);
+                Object.keys(t[l1] || {}).sort().forEach(l2 => {
+                    paths.push(l1 + '|' + l2);
+                    const arr = t[l1][l2];
+                    if (Array.isArray(arr)) arr.forEach(l3 => paths.push(l1 + '|' + l2 + '|' + l3));
+                    else if (arr && typeof arr === 'object') Object.keys(arr).forEach(l3 => paths.push(l1 + '|' + l2 + '|' + l3));
+                });
+            });
+            return paths;
+        }
+
+        function renderCategoryTreeDom() {
+            const t = categoryTreeData.tree;
+            const el = document.getElementById('categoryTreeDisplay');
+            if (!el) return;
+            let html = '';
+            Object.keys(t || {}).sort().forEach(l1 => {
+                html += '<div class="tree-node"><div class="tree-node-l1">' + escapeHtml(l1) +
+                    '<span class="tree-node-actions"><button class="btn" type="button" onclick="addTreeL2(\'' + (l1||'').replace(/'/g, "\\'") + '\')">+ 二级</button><button class="btn" type="button" style="background:#dc3545;" onclick="delTreePath(\'' + (l1||'').replace(/'/g, "\\'") + '\')">删</button></span></div>';
+                Object.keys(t[l1] || {}).sort().forEach(l2 => {
+                    const arr = t[l1][l2];
+                    const l3list = Array.isArray(arr) ? arr : (arr ? Object.keys(arr) : []);
+                    html += '<div class="tree-node tree-node-l2">' + escapeHtml(l2) +
+                        '<span class="tree-node-actions"><button class="btn" type="button" onclick="addTreeL3(\'' + (l1||'').replace(/'/g, "\\'") + "','" + (l2||'').replace(/'/g, "\\'") + '\')">+ 三级</button><button class="btn" type="button" style="background:#dc3545;" onclick="delTreePath(\'' + (l1||'').replace(/'/g, "\\'") + "|" + (l2||'').replace(/'/g, "\\'") + '\')">删</button></span></div>';
+                    (l3list || []).forEach(l3 => {
+                        html += '<div class="tree-node tree-node-l3">' + escapeHtml(l3) +
+                            '<span class="tree-node-actions"><button class="btn" type="button" style="background:#dc3545;" onclick="delTreePath(\'' + (l1||'').replace(/'/g, "\\'") + "|" + (l2||'').replace(/'/g, "\\'") + "|" + (l3||'').replace(/'/g, "\\'") + '\')">删</button></span></div>';
+                    });
+                });
+                html += '</div>';
+            });
+            el.innerHTML = html || '<p style="color:#999; margin:0;">暂无类目，请添加一级类目。</p>';
+        }
+
+        function addTreeL1() {
+            const input = document.getElementById('newL1');
+            const name = (input && input.value || '').trim();
+            if (!name) { alert('请输入一级类目名称'); return; }
+            if (!categoryTreeData.tree[name]) categoryTreeData.tree[name] = {};
+            input.value = '';
+            categoryTreeDirty = true;
+            renderCategoryTreeDom();
+        }
+
+        function addTreeL2(l1) {
+            const name = prompt('二级类目名称：', '');
+            if (!name || !name.trim()) return;
+            if (!categoryTreeData.tree[l1]) categoryTreeData.tree[l1] = {};
+            if (!categoryTreeData.tree[l1][name.trim()]) categoryTreeData.tree[l1][name.trim()] = [];
+            categoryTreeDirty = true;
+            renderCategoryTreeDom();
+        }
+
+        function addTreeL3(l1, l2) {
+            const name = prompt('三级类目名称：', '');
+            if (!name || !name.trim()) return;
+            if (!categoryTreeData.tree[l1][l2]) categoryTreeData.tree[l1][l2] = [];
+            if (categoryTreeData.tree[l1][l2].indexOf(name.trim()) === -1) categoryTreeData.tree[l1][l2].push(name.trim());
+            categoryTreeDirty = true;
+            renderCategoryTreeDom();
+        }
+
+        function delTreePath(path) {
+            if (!confirm('确定删除该节点？其下子节点也会被删除。')) return;
+            const parts = path.split('|');
+            if (parts.length === 1) delete categoryTreeData.tree[path];
+            else if (parts.length === 2) { if (categoryTreeData.tree[parts[0]]) delete categoryTreeData.tree[parts[0]][parts[1]]; }
+            else if (parts.length >= 3) {
+                const arr = categoryTreeData.tree[parts[0]] && categoryTreeData.tree[parts[0]][parts[1]];
+                if (Array.isArray(arr)) categoryTreeData.tree[parts[0]][parts[1]] = arr.filter(x => x !== parts[2]);
+            }
+            categoryTreeDirty = true;
+            renderCategoryTreeDom();
+        }
+
+        function saveCategoryTree() {
+            const paths = treeToPaths();
+            saveCategoryTreeSilent(paths);
+            categoryTreeDirty = false;
+            loadCategoryTree();
+            loadCategories();
+            alert('已保存。记录中将只能选择上述类目。');
+        }
+
+        async function saveCategoryTreeSilent(paths) {
+            try {
+                await fetchWithAuth('/api/admin/category-tree', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paths: paths || [] }) });
+                categoryTreeData.paths = paths || [];
+                categoryTreeData.enabled = (paths || []).length > 0;
+                CATEGORY_LIST_CACHE && (CATEGORY_LIST_CACHE.expires_at = 0);
+            } catch (e) { console.error(e); }
+        }
+
+        async function loadMergeLegacy() {
+            const listEl = document.getElementById('mergeLegacyList');
+            if (!listEl) return;
+            try {
+                const r = await fetchWithAuth('/api/admin/categories');
+                const d = await r.json();
+                const paths = categoryTreeData.paths || [];
+                const pathSet = new Set(paths);
+                const cats = (d.categories || []).map(c => (typeof c === 'string' ? c : c.category));
+                const legacy = cats.filter(c => c && !pathSet.has(c));
+                if (legacy.length === 0) {
+                    listEl.innerHTML = '<p style="color:#28a745; margin:0;">所有分类已在类目树中，无需合并。</p>';
+                    return;
+                }
+                listEl.innerHTML = legacy.map(from => {
+                    const opt = paths.map(p => '<option value="' + escapeHtml(p).replace(/"/g, '&quot;') + '">' + escapeHtml(p.replace(/\|/g, ' > ')) + '</option>').join('');
+                    return '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;"><span style="min-width:120px;">' + escapeHtml(from) + '</span><select class="category-select" style="flex:1;max-width:280px;" data-from="' + escapeHtml(from).replace(/"/g, '&quot;') + '"><option value="">选择目标类目</option>' + opt + '</select><button class="btn" type="button" onclick="runMerge(\'' + (from||'').replace(/'/g, "\\'") + '\', this)">合并到此</button></div>';
+                }).join('');
+            } catch (e) { listEl.innerHTML = '<p style="color:#999;">加载失败</p>'; }
+        }
+
+        async function runMerge(fromName, btn) {
+            const row = btn && btn.closest('div');
+            const sel = row && row.querySelector('select');
+            const toPath = sel && sel.value;
+            if (!toPath) { alert('请选择目标类目'); return; }
+            try {
+                const r = await fetchWithAuth('/api/admin/categories/merge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mappings: [{ from: fromName, to: toPath }] }) });
+                const d = await r.json();
+                if (d.success) { alert('已合并 ' + (d.updated || 0) + ' 条记录'); loadCategories(); loadMergeLegacy(); if (typeof loadRecords === 'function') loadRecords(currentPage); }
+                else alert(d.error || '合并失败');
+            } catch (e) { alert('合并失败: ' + (e.message || e)); }
+        }
+
         // 加载分类
         async function loadCategories() {
             try {
                 const response = await fetchWithAuth('/api/admin/categories');
                 const data = await response.json();
                 if (data.success) {
+                    if (data.tree && data.paths) {
+                        categoryTreeData.tree = data.tree;
+                        categoryTreeData.paths = data.paths;
+                        categoryTreeData.enabled = true;
+                    }
                     const cats = data.categories || [];
                     const tbody = document.getElementById('categoriesTable');
+                    const displayCat = c => (typeof c === 'string' ? c : c.category);
                     if (cats.length === 0) {
                         tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; padding: 40px; color: #999;">暂无分类</td></tr>';
                     } else {
                         tbody.innerHTML = cats.map(c => {
-                            var catEsc = (c.category||'').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                            const cat = displayCat(c);
+                            var catEsc = (cat||'').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                            const display = (cat || '').indexOf('|') >= 0 ? (cat || '').replace(/\|/g, ' > ') : (cat || '');
                             return `<tr>
-                                <td style="font-weight: 600; color: #667eea;">${escapeHtml(c.category)}</td>
-                                <td>${c.count}</td>
+                                <td style="font-weight: 600; color: #667eea;">${escapeHtml(display)}</td>
+                                <td>${c.count || 0}</td>
                                 <td style="font-weight: 600; color: #e74c3c;">¥${(c.amount||0).toFixed(2)}</td>
                                 <td>
                                     <button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px;" onclick="renameCategory('${catEsc}')">重命名</button>
@@ -2438,9 +2702,56 @@
                             </tr>`;
                         }).join('');
                     }
+                    fillCategoryDropdowns(data);
                 }
             } catch (e) {
                 console.error('加载分类失败:', e);
+            }
+        }
+
+        function fillCategoryDropdowns(data) {
+            const paths = (data && data.paths) ? data.paths : (categoryTreeData.paths || []);
+            const categories = (data && data.categories) ? (data.categories || []).map(c => typeof c === 'string' ? c : c.category) : [];
+            const options = paths.length > 0
+                ? paths.map(p => ({ value: p, text: p.replace(/\|/g, ' > ') }))
+                : categories.map(c => ({ value: c, text: c }));
+            function fillSelect(id, allowEmpty) {
+                const sel = document.getElementById(id);
+                if (!sel) return;
+                const cur = sel.value;
+                sel.innerHTML = (allowEmpty ? '<option value="">' + (id === 'categoryFilter' ? '全部分类' : '选择分类') + '</option>' : '') + options.map(o => '<option value="' + (o.value||'').replace(/"/g, '&quot;') + '">' + escapeHtml(o.text) + '</option>').join('');
+                if (cur && options.some(o => o.value === cur)) sel.value = cur;
+            }
+            fillSelect('categoryFilter', true);
+            fillSelect('batchCategorySelect', true);
+            fillSelect('deleteCategoryTarget', true);
+            fillSelect('editCategory', true);
+            if (paths.length > 0) {
+                document.getElementById('editCategorySingleWrap').style.display = 'none';
+                document.getElementById('editCategoryCascadeWrap').style.display = 'block';
+                const l1 = document.getElementById('editCategoryL1');
+                const l2 = document.getElementById('editCategoryL2');
+                const l3 = document.getElementById('editCategoryL3');
+                const l1Keys = Object.keys(categoryTreeData.tree || {}).sort();
+                l1.innerHTML = '<option value="">请选一级</option>' + l1Keys.map(k => '<option value="' + escapeHtml(k).replace(/"/g, '&quot;') + '">' + escapeHtml(k) + '</option>').join('');
+                l2.innerHTML = '<option value="">— 不选 —</option>';
+                l3.innerHTML = '<option value="">— 不选 —</option>';
+                l1.onchange = function() {
+                    const k = l1.value;
+                    const sub = (categoryTreeData.tree || {})[k];
+                    const l2Keys = sub ? Object.keys(sub).sort() : [];
+                    l2.innerHTML = '<option value="">— 不选 —</option>' + l2Keys.map(k2 => '<option value="' + escapeHtml(k2).replace(/"/g, '&quot;') + '">' + escapeHtml(k2) + '</option>').join('');
+                    l3.innerHTML = '<option value="">— 不选 —</option>';
+                };
+                l2.onchange = function() {
+                    const k1 = l1.value, k2 = l2.value;
+                    const arr = (categoryTreeData.tree || {})[k1] && (categoryTreeData.tree || {})[k1][k2];
+                    const l3List = Array.isArray(arr) ? arr : (arr ? Object.keys(arr) : []);
+                    l3.innerHTML = '<option value="">— 不选 —</option>' + l3List.map(k3 => '<option value="' + escapeHtml(k3).replace(/"/g, '&quot;') + '">' + escapeHtml(k3) + '</option>').join('');
+                };
+            } else {
+                document.getElementById('editCategorySingleWrap').style.display = 'block';
+                document.getElementById('editCategoryCascadeWrap').style.display = 'none';
             }
         }
         async function downloadCategoryExcel() {
@@ -2498,12 +2809,13 @@
                 targetSel.innerHTML = '<option value="">请选择目标分类</option>';
                 targetSel.size = 1;
                 fetchWithAuth('/api/admin/categories').then(r => r.json()).then(function(data) {
-                    if (data.success && data.categories) {
-                        allCategoriesForDelete = data.categories.map(function(c) { return typeof c === 'string' ? c : c.category; });
-                        allCategoriesForDelete.filter(function(c) { return c && c !== deleteCategoryName; }).forEach(function(c) {
+                    if (data.success) {
+                        var list = (data.paths && data.paths.length) ? data.paths : (data.categories || []).map(function(c) { return typeof c === 'string' ? c : c.category; });
+                        allCategoriesForDelete = list;
+                        list.filter(function(c) { return c && c !== deleteCategoryName; }).forEach(function(c) {
                             var opt = document.createElement('option');
                             opt.value = c;
-                            opt.textContent = c;
+                            opt.textContent = c.indexOf('|') >= 0 ? c.replace(/\|/g, ' > ') : c;
                             targetSel.appendChild(opt);
                         });
                     }
@@ -2600,6 +2912,10 @@
         }
 
         function showAddCategoryModal() {
+            if (categoryTreeData.enabled && categoryTreeData.paths && categoryTreeData.paths.length > 0) {
+                alert('💡 已启用「仅允许预设类目」。\n\n请在上方「三级类目」中点击「添加一级」或节点旁的「+ 二级」「+ 三级」来新增类目，保存后即可在记录中选择。');
+                return;
+            }
             alert('💡 新增分类：\n\n在「记录列表」或「批量导入」时直接输入新分类名即可自动创建。\n\n例如：在分类列输入「早点」、「宵夜」等新名称，系统会自动创建该分类。');
         }
 
