@@ -1048,6 +1048,7 @@
                         <button class="btn" id="backBtn" onclick="goBack()" style="width: auto; padding: 10px 24px; display: none;">← 返回</button>
                     </div>
                     <div id="tableStatsContent" style="padding: 25px;">
+                        <div id="tableStatsLoading" style="display: none; text-align: center; padding: 40px; color: #999;">⏳ 加载中...</div>
                         <!-- 月份列表 -->
                         <div id="monthList" class="month-grid"></div>
                         <!-- 日期列表 -->
@@ -1315,12 +1316,12 @@
         function showSection(section) {
             document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
             document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-            document.getElementById(section).classList.add('active');
-            event.target.classList.add('active');
-            
+            const sectionEl = document.getElementById(section);
+            if (sectionEl) sectionEl.classList.add('active');
+            if (event && event.target) event.target.classList.add('active');
             if (section === 'overview') loadOverview();
             else if (section === 'records') loadRecords();
-            else if (section === 'table_stats') loadMonthlyStats();
+            else if (section === 'table_stats') setTimeout(function() { loadMonthlyStats(); }, 0);
             else if (section === 'stats') loadStats();
             else if (section === 'categories') loadCategories();
             else if (section === 'settings') loadSettings();
@@ -2243,16 +2244,28 @@
         let currentMonth = null;
         let currentDate = null;
 
+        function safeDisplay(el, value) { if (el && el.style) el.style.display = value; }
+        function safeText(el, text) { if (el) el.textContent = text; }
+
         // 加载月度统计
         async function loadMonthlyStats(retryCount = 0) {
             const maxRetries = 2;
             const contentDiv = document.getElementById('tableStatsContent');
-            
-            // 显示加载状态
-            if (retryCount === 0) {
-                contentDiv.innerHTML = '<div style="text-align: center; padding: 40px; color: #999;">⏳ 加载中...</div>';
+            const loadingEl = document.getElementById('tableStatsLoading');
+            const titleEl = document.getElementById('tableStatsTitle');
+            const backBtn = document.getElementById('backBtn');
+            const monthListEl = document.getElementById('monthList');
+            const dayListEl = document.getElementById('dayList');
+            const detailListEl = document.getElementById('detailList');
+            if (!contentDiv || !monthListEl) {
+                console.warn('表格统计容器未就绪');
+                if (contentDiv) contentDiv.innerHTML = '<div style="padding:20px;color:#666;">请刷新页面后重试</div>';
+                return;
             }
-            
+            safeDisplay(loadingEl, retryCount === 0 ? 'block' : 'none');
+            safeDisplay(monthListEl, 'none');
+            safeDisplay(dayListEl, 'none');
+            safeDisplay(detailListEl, 'none');
             try {
                 const response = await fetchWithAuth('/api/admin/monthly_stats');
                 const data = await response.json();
@@ -2260,17 +2273,15 @@
                     currentView = 'months';
                     currentYear = data.year;
                     showAllCategories = false;
-                    document.getElementById('tableStatsTitle').textContent = `${data.year}年所有月份`;
-                    document.getElementById('backBtn').style.display = 'none';
-                    document.getElementById('monthList').style.display = 'grid';
-                    document.getElementById('dayList').style.display = 'none';
-                    document.getElementById('detailList').style.display = 'none';
-                    
-                    const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', 
-                                     '七月', '八月', '九月', '十月', '十一月', '十二月'];
-                    const monthList = document.getElementById('monthList');
-                    monthList.innerHTML = '';
-                    
+                    safeDisplay(loadingEl, 'none');
+                    safeText(titleEl, data.year + '年所有月份');
+                    safeDisplay(backBtn, 'none');
+                    safeDisplay(monthListEl, 'grid');
+                    safeDisplay(dayListEl, 'none');
+                    safeDisplay(detailListEl, 'none');
+                    monthListEl.innerHTML = '';
+                    const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月',
+                        '七月', '八月', '九月', '十月', '十一月', '十二月'];
                     for (let month = 1; month <= 12; month++) {
                         const key = `${data.year}-${String(month).padStart(2, '0')}`;
                         const stats = data.months[key] || {amount: 0, count: 0};
@@ -2282,27 +2293,23 @@
                             <div class="amount">¥${stats.amount.toFixed(2)}</div>
                             <div class="count">${stats.count} 条记录</div>
                         `;
-                        monthList.appendChild(card);
+                        monthListEl.appendChild(card);
                     }
-                    
-                    // 加载年份分类统计（不等待，失败不影响主流程）
                     loadCategoryStats('year', data.year).catch(e => console.log('分类统计加载失败，忽略'));
                 } else {
                     throw new Error(data.error || '加载失败');
                 }
             } catch (e) {
                 console.error('加载月度统计失败:', e);
+                safeDisplay(loadingEl, 'none');
                 if (retryCount < maxRetries) {
-                    // 静默重试
                     setTimeout(() => loadMonthlyStats(retryCount + 1), 1000 * (retryCount + 1));
-                } else {
-                    // 显示错误信息
-                    contentDiv.innerHTML = `
-                        <div style="text-align: center; padding: 40px;">
-                            <div style="color: #e74c3c; margin-bottom: 15px;">❌ 加载失败</div>
-                            <div style="color: #666; margin-bottom: 15px; font-size: 12px;">错误: ${e.message || '未知错误'}</div>
-                            <button class="btn" onclick="loadMonthlyStats()" style="width: auto; padding: 10px 24px;">重试</button>
-                        </div>
+                } else if (loadingEl) {
+                    loadingEl.style.display = 'block';
+                    loadingEl.innerHTML = `
+                        <div style="color: #e74c3c; margin-bottom: 15px;">❌ 加载失败</div>
+                        <div style="color: #666; margin-bottom: 15px; font-size: 12px;">错误: ${(e.message || '未知错误').replace(/</g, '&lt;')}</div>
+                        <button class="btn" onclick="loadMonthlyStats()" style="width: auto; padding: 10px 24px;">重试</button>
                     `;
                 }
             }
@@ -2311,40 +2318,45 @@
         // 加载每日统计
         async function loadDailyStats(year, month, retryCount = 0) {
             const maxRetries = 2;
+            const titleEl = document.getElementById('tableStatsTitle');
+            const backBtn = document.getElementById('backBtn');
+            const monthListEl = document.getElementById('monthList');
+            const dayListEl = document.getElementById('dayList');
+            const detailListEl = document.getElementById('detailList');
             try {
                 const response = await fetchWithAuth(`/api/admin/daily_stats?year=${year}&month=${month}`);
                 const data = await response.json();
                 if (data.success) {
                     currentView = 'days';
                     currentMonth = month;
-                    const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', 
-                                     '七月', '八月', '九月', '十月', '十一月', '十二月'];
-                    document.getElementById('tableStatsTitle').textContent = `${year}年${monthNames[month - 1]}`;
-                    document.getElementById('backBtn').style.display = 'block';
-                    document.getElementById('monthList').style.display = 'none';
-                    document.getElementById('dayList').style.display = 'grid';
-                    document.getElementById('detailList').style.display = 'none';
-                    
+                    const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月',
+                        '七月', '八月', '九月', '十月', '十一月', '十二月'];
+                    safeText(titleEl, year + '年' + monthNames[month - 1]);
+                    safeDisplay(backBtn, 'block');
+                    safeDisplay(monthListEl, 'none');
+                    safeDisplay(dayListEl, 'grid');
+                    safeDisplay(detailListEl, 'none');
                     const dayList = document.getElementById('dayList');
-                    if (retryCount === 0) {
-                        dayList.innerHTML = '<div style="text-align: center; padding: 20px; color: #999;">⏳ 加载中...</div>';
+                    if (dayList) {
+                        if (retryCount === 0) dayList.innerHTML = '<div style="text-align: center; padding: 20px; color: #999;">⏳ 加载中...</div>';
+                        dayList.innerHTML = '';
                     }
                     
-                    dayList.innerHTML = '';
-                    
-                    data.days.forEach(day => {
-                        const card = document.createElement('div');
-                        card.className = 'day-card' + (day.count === 0 ? ' no-data' : '');
-                        if (day.count > 0) {
-                            card.onclick = () => loadDateDetails(day.date);
-                        }
-                        card.innerHTML = `
-                            <div class="date">${day.day}日</div>
-                            <div class="amount">¥${day.amount.toFixed(2)}</div>
-                            <div class="count">${day.count} 条</div>
-                        `;
-                        dayList.appendChild(card);
-                    });
+                    if (dayList) {
+                        data.days.forEach(day => {
+                            const card = document.createElement('div');
+                            card.className = 'day-card' + (day.count === 0 ? ' no-data' : '');
+                            if (day.count > 0) {
+                                card.onclick = () => loadDateDetails(day.date);
+                            }
+                            card.innerHTML = `
+                                <div class="date">${day.day}日</div>
+                                <div class="amount">¥${day.amount.toFixed(2)}</div>
+                                <div class="count">${day.count} 条</div>
+                            `;
+                            dayList.appendChild(card);
+                        });
+                    }
                     
                     // 加载月份分类统计（不等待，失败不影响主流程）
                     loadCategoryStats('month', year, month).catch(e => console.log('分类统计加载失败，忽略'));
@@ -2357,7 +2369,7 @@
                     setTimeout(() => loadDailyStats(year, month, retryCount + 1), 1000 * (retryCount + 1));
                 } else {
                     const dayList = document.getElementById('dayList');
-                    dayList.innerHTML = `
+                    if (dayList) dayList.innerHTML = `
                         <div style="text-align: center; padding: 40px;">
                             <div style="color: #e74c3c; margin-bottom: 15px;">❌ 加载失败，请重试</div>
                             <button class="btn" onclick="loadDailyStats(${year}, ${month})" style="width: auto; padding: 10px 24px;">重试</button>
@@ -2370,6 +2382,11 @@
         // 加载日期明细
         async function loadDateDetails(dateStr, retryCount = 0) {
             const maxRetries = 2;
+            const titleEl = document.getElementById('tableStatsTitle');
+            const backBtn = document.getElementById('backBtn');
+            const monthListEl = document.getElementById('monthList');
+            const dayListEl = document.getElementById('dayList');
+            const detailListEl = document.getElementById('detailList');
             try {
                 const response = await fetchWithAuth(`/api/admin/date_records?date=${dateStr}`);
                 const data = await response.json();
@@ -2377,20 +2394,17 @@
                     currentView = 'details';
                     currentDate = dateStr;
                     const dateObj = new Date(dateStr);
-                    const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', 
-                                     '七月', '八月', '九月', '十月', '十一月', '十二月'];
-                    document.getElementById('tableStatsTitle').textContent = 
-                        `${dateObj.getFullYear()}年${monthNames[dateObj.getMonth()]}${dateObj.getDate()}日`;
-                    document.getElementById('backBtn').style.display = 'block';
-                    document.getElementById('monthList').style.display = 'none';
-                    document.getElementById('dayList').style.display = 'none';
-                    document.getElementById('detailList').style.display = 'block';
-                    
+                    const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月',
+                        '七月', '八月', '九月', '十月', '十一月', '十二月'];
+                    safeText(titleEl, dateObj.getFullYear() + '年' + monthNames[dateObj.getMonth()] + dateObj.getDate() + '日');
+                    safeDisplay(backBtn, 'block');
+                    safeDisplay(monthListEl, 'none');
+                    safeDisplay(dayListEl, 'none');
+                    safeDisplay(detailListEl, 'block');
                     const detailList = document.getElementById('detailList');
-                    if (retryCount === 0) {
-                        detailList.innerHTML = '<div style="text-align: center; padding: 40px; color: #999;">⏳ 加载中...</div>';
-                    }
-                    detailList.innerHTML = `
+                    if (detailList) {
+                        if (retryCount === 0) detailList.innerHTML = '<div style="text-align: center; padding: 40px; color: #999;">⏳ 加载中...</div>';
+                        detailList.innerHTML = `
                         <div class="detail-header">
                             <h4>明细记录</h4>
                             <div class="total">总计: ¥${data.total.toFixed(2)}</div>
@@ -2427,8 +2441,8 @@
                 if (retryCount < 2) {
                     setTimeout(() => loadDateDetails(dateStr, retryCount + 1), 1000 * (retryCount + 1));
                 } else {
-                    const detailList = document.getElementById('detailList');
-                    detailList.innerHTML = `
+                    const detailListErr = document.getElementById('detailList');
+                    if (detailListErr) detailListErr.innerHTML = `
                         <div style="text-align: center; padding: 40px;">
                             <div style="color: #e74c3c; margin-bottom: 15px;">❌ 加载失败，请重试</div>
                             <button class="btn" onclick="loadDateDetails('${dateStr}')" style="width: auto; padding: 10px 24px;">重试</button>
@@ -2557,26 +2571,22 @@
             .then(data => {
                 if (data.success) {
                     currentView = 'category_details';
-                    const categoryStats = document.getElementById('categoryStats');
-                    categoryStats.style.display = 'none';
-                    document.getElementById('monthList').style.display = 'none';
-                    document.getElementById('dayList').style.display = 'none';
-                    document.getElementById('detailList').style.display = 'block';
-                    
+                    safeDisplay(document.getElementById('categoryStats'), 'none');
+                    safeDisplay(document.getElementById('monthList'), 'none');
+                    safeDisplay(document.getElementById('dayList'), 'none');
+                    safeDisplay(document.getElementById('detailList'), 'block');
                     let periodText = '';
                     if (type === 'year') {
-                        periodText = `${args[0]}年`;
+                        periodText = args[0] + '年';
                     } else if (type === 'month') {
-                        const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', 
-                                         '七月', '八月', '九月', '十月', '十一月', '十二月'];
-                        periodText = `${args[0]}年${monthNames[args[1] - 1]}`;
+                        const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月',
+                            '七月', '八月', '九月', '十月', '十一月', '十二月'];
+                        periodText = args[0] + '年' + monthNames[args[1] - 1];
                     }
-                    
-                    document.getElementById('tableStatsTitle').textContent = `${periodText} - ${category}`;
-                    document.getElementById('backBtn').style.display = 'block';
-                    
+                    safeText(document.getElementById('tableStatsTitle'), periodText + ' - ' + category);
+                    safeDisplay(document.getElementById('backBtn'), 'block');
                     const detailList = document.getElementById('detailList');
-                    detailList.innerHTML = `
+                    if (detailList) detailList.innerHTML = `
                         <div class="detail-header">
                             <h4>${category} 明细记录</h4>
                             <div class="total">总计: ¥${data.total.toFixed(2)} (${data.count}条)</div>
