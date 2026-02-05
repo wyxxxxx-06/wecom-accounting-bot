@@ -2285,8 +2285,8 @@
                         monthList.appendChild(card);
                     }
                     
-                    // 加载年份分类统计（放在下方）
-                    loadCategoryStats('year', data.year);
+                    // 加载年份分类统计（不等待，失败不影响主流程）
+                    loadCategoryStats('year', data.year).catch(e => console.log('分类统计加载失败，忽略'));
                 } else {
                     throw new Error(data.error || '加载失败');
                 }
@@ -2346,8 +2346,8 @@
                         dayList.appendChild(card);
                     });
                     
-                    // 加载月份分类统计（放在日期列表下方）
-                    loadCategoryStats('month', year, month);
+                    // 加载月份分类统计（不等待，失败不影响主流程）
+                    loadCategoryStats('month', year, month).catch(e => console.log('分类统计加载失败，忽略'));
                 } else {
                     throw new Error(data.error || '加载失败');
                 }
@@ -2417,8 +2417,8 @@
                         </table>
                     `;
                     
-                    // 加载日期分类统计（放在明细列表下方）
-                    loadCategoryStats('date', dateStr);
+                    // 加载日期分类统计（不等待，失败不影响主流程）
+                    loadCategoryStats('date', dateStr).catch(e => console.log('分类统计加载失败，忽略'));
                 } else {
                     throw new Error(data.error || '加载失败');
                 }
