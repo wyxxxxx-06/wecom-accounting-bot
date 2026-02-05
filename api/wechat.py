@@ -2668,6 +2668,24 @@ async def import_excel(file: UploadFile = File(...), request: Request = None):
         return Response(content="error", status_code=500)
 
 
+@app.post("/api/admin/import")
+async def admin_import_excel(file: UploadFile = File(...), payload: dict = Depends(verify_admin_token)):
+    """管理后台：批量导入修改后的 Excel（按 ID 更新已有记录）"""
+    try:
+        file_bytes = await file.read()
+        parsed = parse_import_excel(file_bytes)
+        if parsed.get("error"):
+            return {"success": False, "error": parsed["error"]}
+        updates = parsed.get("updates", [])
+        if not updates:
+            return {"success": False, "error": "没有可更新的记录"}
+        result = batch_update_records(updates)
+        return {"success": True, "updated": result["success"], "failed": len(result["failed"]), "message": f"已更新 {result['success']} 条，失败 {len(result['failed'])} 条"}
+    except Exception as e:
+        print(f"导入错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
 @app.get("/api/export_categories")
 async def export_categories():
     """导出分类管理 Excel"""
@@ -3286,6 +3304,70 @@ async def admin_delete_debt(
         return {"success": False, "error": str(e)}
 
 
+@app.get("/api/admin/export_categories")
+async def admin_export_categories(payload: dict = Depends(verify_admin_token)):
+    """管理后台：下载分类表 Excel（与 export_categories 相同，需登录）"""
+    try:
+        data = build_category_excel_bytes()
+        filename = "categories.xlsx"
+        from urllib.parse import quote
+        encoded_filename = quote(filename)
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded_filename}',
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        }
+        return Response(content=data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
+    except Exception as e:
+        print(f"导出分类错误: {str(e)[:100]}")
+        return Response(content="error", status_code=500)
+
+
+@app.post("/api/admin/import_categories")
+async def admin_import_categories(file: UploadFile = File(...), payload: dict = Depends(verify_admin_token)):
+    """管理后台：上传分类表 Excel 批量重命名"""
+    try:
+        file_bytes = await file.read()
+        parsed = parse_category_excel(file_bytes)
+        if parsed.get("error"):
+            return Response(content=parsed["error"], status_code=400)
+        renames = parsed.get("renames", [])
+        if not renames:
+            return Response(content="no_changes", status_code=400)
+        result = batch_rename_categories(renames)
+        return {"success": True, "renamed": result["success"], "failed": result["failed"], "message": f"已重命名 {result['success']} 个分类，失败 {len(result['failed'])} 个"}
+    except Exception as e:
+        print(f"导入分类错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/admin/records/batch_set_category")
+async def admin_batch_set_category(request: Request, payload: dict = Depends(verify_admin_token)):
+    """批量修改选中记录的分类"""
+    try:
+        data = await request.json()
+        ids = data.get("ids", [])
+        category = (data.get("category") or "").strip()
+        if not ids or not category:
+            return {"success": False, "error": "请选择记录并指定分类"}
+        supabase = get_supabase_client()
+        updated = 0
+        for rid in ids:
+            try:
+                r = supabase.table("records").select("amount,description").eq("id", rid).execute()
+                if not r.data or len(r.data) == 0:
+                    continue
+                row = r.data[0]
+                supabase.table("records").update({"category": category}).eq("id", rid).execute()
+                updated += 1
+            except Exception:
+                pass
+        invalidate_records_cache()
+        return {"success": True, "updated": updated}
+    except Exception as e:
+        print(f"批量改分类错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
 @app.get("/api/admin/settings")
 async def admin_get_settings(payload: dict = Depends(verify_admin_token)):
     """获取所有设置"""
@@ -3793,9 +3875,25 @@ async def admin_export(
             filtered = filter_records_by_local_range(all_records, start_date, end_date)
         else:
             filtered = all_records
+
+        # 按分类筛选（可选）
+        categories_param = params.get("categories", "")
+        if categories_param:
+            cat_list = [c.strip() for c in categories_param.split(",") if c.strip()]
+            if cat_list:
+                filtered = [r for r in filtered if r.get("category", "").strip() in cat_list]
+        
+        # 导出用时间范围（用于 Excel 表头）
+        if filtered:
+            from_dates = [to_local_datetime(r["created_at"]) for r in filtered]
+            export_start = min(from_dates).replace(hour=0, minute=0, second=0, microsecond=0)
+            export_end = max(from_dates) + timedelta(days=1)
+        else:
+            export_start = datetime.now(LOCAL_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+            export_end = export_start + timedelta(days=1)
         
         # 生成Excel
-        excel_bytes = build_export_excel_bytes(filtered)
+        excel_bytes = build_export_excel_bytes(filtered, export_start, export_end, limit=10000)
         
         # 生成文件名
         now = datetime.now(LOCAL_TZ)
