@@ -54,6 +54,10 @@ security = HTTPBearer()
 PENDING_DELETES = {}
 # 待分类选择（内存，按 openid）
 PENDING_CATEGORY_PICKS = {}
+# 消息去重缓存（内存，避免数据库查询）
+MSG_DEDUP_CACHE = {}
+MSG_DEDUP_MAX_SIZE = 1000  # 最多保留1000条消息ID
+MSG_DEDUP_TTL = 300  # 消息ID保留5分钟
 
 # ============ 分类关键词映射 ============
 CATEGORY_KEYWORDS = {
@@ -69,6 +73,9 @@ CATEGORY_KEYWORDS = {
 
 # 关键词别名缓存（全局）
 CATEGORY_ALIAS_CACHE = {"value": {}, "expires_at": 0}
+# 分类列表缓存（全局）
+CATEGORY_LIST_CACHE = {"value": [], "expires_at": 0}
+CATEGORY_LIST_CACHE_TTL = 600  # 分类列表缓存10分钟
 
 # ============ 数据库操作（使用 REST API）============
 def get_supabase_client():
@@ -99,7 +106,7 @@ def get_supabase_client():
                 def execute(self):
                     return self
             
-            response = httpx.post(self.url, json=data, headers=self.headers, timeout=10.0)
+            response = httpx.post(self.url, json=data, headers=self.headers, timeout=5.0)
             response.raise_for_status()
             return Result(response.json() if response.content else [data])
         
@@ -151,7 +158,7 @@ def get_supabase_client():
             for column, op, value in self.filters:
                 self.params[column] = f"{op}.{value}"
             
-            response = httpx.get(self.url, params=self.params, headers=self.headers, timeout=10.0)
+            response = httpx.get(self.url, params=self.params, headers=self.headers, timeout=5.0)
             response.raise_for_status()
             class Result:
                 def __init__(self, data):
@@ -174,7 +181,7 @@ def get_supabase_client():
             for column, op, value in self.filters:
                 self.params[column] = f"{op}.{value}"
 
-            response = httpx.patch(self.url, params=self.params, json=self.data, headers=self.headers, timeout=10.0)
+            response = httpx.patch(self.url, params=self.params, json=self.data, headers=self.headers, timeout=5.0)
             response.raise_for_status()
             class Result:
                 def __init__(self, data):
@@ -196,7 +203,7 @@ def get_supabase_client():
             for column, op, value in self.filters:
                 self.params[column] = f"{op}.{value}"
 
-            response = httpx.delete(self.url, params=self.params, headers=self.headers, timeout=10.0)
+            response = httpx.delete(self.url, params=self.params, headers=self.headers, timeout=5.0)
             response.raise_for_status()
             class Result:
                 def __init__(self, data):
@@ -209,7 +216,8 @@ def get_supabase_client():
 def add_record(openid: str, nickname: str, amount: float, category: str, description: str, created_at: datetime = None):
     """添加记账记录"""
     try:
-        archive_old_records()
+        # 注意：archive_old_records() 已移除，避免阻塞消息响应
+        # 归档应通过定时任务或管理接口触发
         supabase = get_supabase_client()
         created_at_value = to_utc_iso(created_at or datetime.now(LOCAL_TZ))
         data = {
@@ -651,29 +659,33 @@ def list_subscribers(report_type: str):
 
 
 def is_duplicate_message(msg_id: str) -> bool:
-    """检查消息是否已处理"""
+    """检查消息是否已处理（使用内存缓存，避免数据库查询延迟）"""
     if not msg_id:
         return False
-    try:
-        supabase = get_supabase_client()
-        result = supabase.table("message_dedup").select("msg_id").eq("msg_id", msg_id).limit(1).execute()
-        return bool(result.data)
-    except Exception:
-        return False
+    now = time.time()
+    # 检查内存缓存
+    if msg_id in MSG_DEDUP_CACHE:
+        return True
+    return False
 
 
 def record_message_id(msg_id: str) -> None:
-    """记录消息 ID 用于去重"""
+    """记录消息 ID 用于去重（使用内存缓存）"""
     if not msg_id:
         return
-    try:
-        supabase = get_supabase_client()
-        supabase.table("message_dedup").insert({
-            "msg_id": msg_id,
-            "created_at": datetime.now(LOCAL_TZ).isoformat()
-        }).execute()
-    except Exception:
-        return
+    now = time.time()
+    MSG_DEDUP_CACHE[msg_id] = now
+    # 清理过期和超量的消息ID
+    if len(MSG_DEDUP_CACHE) > MSG_DEDUP_MAX_SIZE:
+        # 删除过期的
+        expired = [k for k, v in MSG_DEDUP_CACHE.items() if now - v > MSG_DEDUP_TTL]
+        for k in expired:
+            MSG_DEDUP_CACHE.pop(k, None)
+        # 如果还是太多，删除最老的
+        if len(MSG_DEDUP_CACHE) > MSG_DEDUP_MAX_SIZE:
+            sorted_items = sorted(MSG_DEDUP_CACHE.items(), key=lambda x: x[1])
+            for k, _ in sorted_items[:len(MSG_DEDUP_CACHE) - MSG_DEDUP_MAX_SIZE // 2]:
+                MSG_DEDUP_CACHE.pop(k, None)
 
 
 # ============ 消息解析 ============
@@ -744,47 +756,30 @@ def parse_category(text: str) -> str:
 
 
 def match_alias_category(text: str) -> str:
-    """匹配已学习的别名分类"""
+    """匹配已学习的别名分类（优化版，减少数据库查询）"""
     text_lower = text.lower().strip()
     aliases = get_category_aliases()
     
-    # 1. 精确匹配（优先）
+    # 1. 精确匹配（优先）- 从别名缓存
     if text_lower in aliases:
         return aliases[text_lower]
     
-    # 2. 包含匹配
+    # 2. 包含匹配 - 从别名缓存
     for keyword, category in aliases.items():
         if keyword in text_lower or text_lower in keyword:
             return category
     
-    # 3. 从历史记录中查找相同描述的分类（精确匹配）
+    # 3. 从历史记录中查找相同描述的分类（仅精确匹配，移除了模糊匹配以提高响应速度）
     try:
         supabase = get_supabase_client()
-        result = supabase.table("records").select("category,description").eq("description", text).order("created_at", desc=True).limit(1).execute()
+        result = supabase.table("records").select("category").eq("description", text).order("created_at", desc=True).limit(1).execute()
         if result.data:
             return result.data[0].get("category", "")
     except Exception:
         pass
     
-    # 4. 从历史记录中查找包含该关键词的描述（模糊匹配）
-    try:
-        supabase = get_supabase_client()
-        # 查找描述以该关键词开头的记录
-        result = supabase.table("records").select("category,description").ilike("description", f"{text}%").order("created_at", desc=True).limit(5).execute()
-        if result.data:
-            # 找到最匹配的（描述最接近的）
-            best_match = None
-            for record in result.data:
-                desc = record.get("description", "").strip()
-                if desc == text or desc.startswith(text + " "):
-                    best_match = record
-                    break
-            if best_match:
-                return best_match.get("category", "")
-            # 如果没有精确匹配，返回第一个
-            return result.data[0].get("category", "")
-    except Exception:
-        pass
+    # 注意：已移除模糊匹配查询以提高微信消息响应速度
+    # 如果需要恢复模糊匹配，请确保不会超过微信5秒响应限制
     
     return ""
 
@@ -1449,7 +1444,11 @@ def rename_category(old_name: str, new_name: str) -> dict:
 
 
 def get_all_categories() -> list:
-    """获取所有已使用的分类"""
+    """获取所有已使用的分类（带缓存）"""
+    now = int(time.time())
+    # 先检查缓存
+    if CATEGORY_LIST_CACHE["value"] and now < CATEGORY_LIST_CACHE["expires_at"]:
+        return CATEGORY_LIST_CACHE["value"]
     try:
         supabase = get_supabase_client()
         result = supabase.table("records").select("category").execute()
@@ -1458,9 +1457,16 @@ def get_all_categories() -> list:
             cat = r.get("category", "").strip()
             if cat:
                 categories.add(cat)
-        return sorted(list(categories))
+        sorted_categories = sorted(list(categories))
+        # 更新缓存
+        CATEGORY_LIST_CACHE["value"] = sorted_categories
+        CATEGORY_LIST_CACHE["expires_at"] = now + CATEGORY_LIST_CACHE_TTL
+        return sorted_categories
     except Exception as e:
         print(f"获取分类列表错误: {str(e)[:100]}")
+        # 如果有旧缓存，返回旧缓存而不是空列表
+        if CATEGORY_LIST_CACHE["value"]:
+            return CATEGORY_LIST_CACHE["value"]
         return []
 
 
