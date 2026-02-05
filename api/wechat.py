@@ -1624,10 +1624,103 @@ def set_setting(key: str, value: str) -> bool:
         return False
 
 
-def get_all_categories() -> list:
-    """获取所有已使用的分类（带缓存）"""
+# ============ 三级类目树（可选）============
+CATEGORY_TREE_SEP = "|"
+CATEGORY_TREE_CACHE = {"paths": None, "expires_at": 0}
+CATEGORY_TREE_CACHE_TTL = 60
+
+
+def get_category_tree_paths() -> list:
+    """返回预设类目路径列表；空或未设置时为 None（表示使用「从记录推断」的旧逻辑）"""
     now = int(time.time())
-    # 先检查缓存
+    if CATEGORY_TREE_CACHE["paths"] is not None and now < CATEGORY_TREE_CACHE["expires_at"]:
+        return CATEGORY_TREE_CACHE["paths"]
+    raw = get_setting("category_tree", "").strip()
+    if not raw:
+        CATEGORY_TREE_CACHE["paths"] = None
+        CATEGORY_TREE_CACHE["expires_at"] = now + CATEGORY_TREE_CACHE_TTL
+        return None
+    try:
+        paths = json.loads(raw)
+        if not isinstance(paths, list):
+            paths = None
+        else:
+            paths = [str(p).strip() for p in paths if str(p).strip()]
+        CATEGORY_TREE_CACHE["paths"] = paths if paths else None
+    except Exception:
+        CATEGORY_TREE_CACHE["paths"] = None
+    CATEGORY_TREE_CACHE["expires_at"] = now + CATEGORY_TREE_CACHE_TTL
+    return CATEGORY_TREE_CACHE["paths"]
+
+
+def paths_to_tree(paths: list) -> dict:
+    """将路径列表转为树结构：{ "一级": { "二级": ["三级1","三级2"], ... }, ... }"""
+    tree = {}
+    for p in paths:
+        p = (p or "").strip()
+        if not p:
+            continue
+        parts = p.split(CATEGORY_TREE_SEP)
+        if len(parts) >= 1 and parts[0]:
+            l1 = parts[0]
+            if l1 not in tree:
+                tree[l1] = {}
+            if len(parts) >= 2 and parts[1]:
+                l2 = parts[1]
+                if l2 not in tree[l1]:
+                    tree[l1][l2] = []
+                if len(parts) >= 3 and parts[2]:
+                    l3 = parts[2]
+                    if l3 not in tree[l1][l2]:
+                        tree[l1][l2].append(l3)
+    return tree
+
+
+def set_category_tree(paths: list) -> bool:
+    """保存类目树路径列表；传入空列表则关闭「仅允许预设类目」"""
+    paths = [str(p).strip() for p in paths if str(p).strip()]
+    ok = set_setting("category_tree", json.dumps(paths, ensure_ascii=False))
+    if ok:
+        CATEGORY_TREE_CACHE["paths"] = paths if paths else None
+        CATEGORY_TREE_CACHE["expires_at"] = 0
+        CATEGORY_LIST_CACHE["expires_at"] = 0
+    return ok
+
+
+def merge_categories_to_tree(mappings: list) -> dict:
+    """将旧分类名批量改为新路径：mappings = [ {"from": "早饭", "to": "正餐|早饭"}, ... ]。同时更新 category_aliases。"""
+    if not mappings:
+        return {"success": 0, "failed": 0, "errors": []}
+    supabase = get_supabase_client()
+    updated = 0
+    failed = 0
+    errors = []
+    for m in mappings:
+        from_name = (m.get("from") or "").strip()
+        to_path = (m.get("to") or "").strip()
+        if not from_name or not to_path:
+            continue
+        try:
+            r = supabase.table("records").update({"category": to_path}).eq("category", from_name).execute()
+            updated += len(r.data) if r.data else 0
+            supabase.table("category_aliases").update({"category": to_path}).eq("category", from_name).execute()
+        except Exception as e:
+            failed += 1
+            errors.append(f"{from_name}→{to_path}: {str(e)[:50]}")
+    invalidate_records_cache()
+    CATEGORY_ALIAS_CACHE["expires_at"] = 0
+    CATEGORY_LIST_CACHE["expires_at"] = 0
+    return {"success": updated, "failed": failed, "errors": errors}
+
+
+def get_all_categories() -> list:
+    """获取可选分类：若已设置三级类目树则只返回树中的路径；否则从记录中汇总（兼容旧逻辑）"""
+    tree_paths = get_category_tree_paths()
+    if tree_paths is not None and len(tree_paths) > 0:
+        CATEGORY_LIST_CACHE["value"] = sorted(tree_paths)
+        CATEGORY_LIST_CACHE["expires_at"] = int(time.time()) + CATEGORY_LIST_CACHE_TTL
+        return sorted(tree_paths)
+    now = int(time.time())
     if CATEGORY_LIST_CACHE["value"] and now < CATEGORY_LIST_CACHE["expires_at"]:
         return CATEGORY_LIST_CACHE["value"]
     try:
@@ -1639,13 +1732,11 @@ def get_all_categories() -> list:
             if cat:
                 categories.add(cat)
         sorted_categories = sorted(list(categories))
-        # 更新缓存
         CATEGORY_LIST_CACHE["value"] = sorted_categories
         CATEGORY_LIST_CACHE["expires_at"] = now + CATEGORY_LIST_CACHE_TTL
         return sorted_categories
     except Exception as e:
         print(f"获取分类列表错误: {str(e)[:100]}")
-        # 如果有旧缓存，返回旧缓存而不是空列表
         if CATEGORY_LIST_CACHE["value"]:
             return CATEGORY_LIST_CACHE["value"]
         return []
@@ -3020,6 +3111,9 @@ async def admin_update_record(
         else:
             created_at = None
         
+        allowed = get_category_tree_paths()
+        if allowed is not None and len(allowed) > 0 and category not in allowed:
+            return {"success": False, "error": "只能选择已设置的类目，当前值不在类目树中"}
         update_data = {
             "description": description,
             "amount": amount,
@@ -3209,10 +3303,54 @@ async def admin_categories(payload: dict = Depends(verify_admin_token)):
             }
             for cat, stats in sorted(category_stats.items())
         ]
-        
-        return {"success": True, "categories": categories}
+        out = {"success": True, "categories": categories}
+        paths = get_category_tree_paths()
+        if paths is not None:
+            out["tree"] = paths_to_tree(paths)
+            out["paths"] = sorted(paths)
+        return out
     except Exception as e:
         print(f"分类列表错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/admin/category-tree")
+async def admin_get_category_tree(payload: dict = Depends(verify_admin_token)):
+    """获取三级类目树（用于级联选择与树形展示）"""
+    paths = get_category_tree_paths()
+    if paths is None or len(paths) == 0:
+        return {"success": True, "tree": {}, "paths": [], "enabled": False}
+    return {"success": True, "tree": paths_to_tree(paths), "paths": sorted(paths), "enabled": True}
+
+
+@app.post("/api/admin/category-tree")
+async def admin_set_category_tree(request: Request, payload: dict = Depends(verify_admin_token)):
+    """保存三级类目树；body: { "paths": ["正餐", "正餐|早饭", "正餐|午饭|外卖", ...] }"""
+    try:
+        data = await request.json()
+        paths = data.get("paths", [])
+        if not isinstance(paths, list):
+            return {"success": False, "error": "paths 需为数组"}
+        paths = [str(p).strip() for p in paths if str(p).strip()]
+        set_category_tree(paths)
+        return {"success": True, "paths": sorted(paths)}
+    except Exception as e:
+        print(f"保存类目树错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/admin/categories/merge")
+async def admin_merge_categories(request: Request, payload: dict = Depends(verify_admin_token)):
+    """将旧分类合并到新路径（批量更新记录与别名）；body: { "mappings": [ {"from": "早饭", "to": "正餐|早饭"}, ... ] }"""
+    try:
+        data = await request.json()
+        mappings = data.get("mappings", [])
+        if not isinstance(mappings, list) or not mappings:
+            return {"success": False, "error": "请提供 mappings 数组"}
+        result = merge_categories_to_tree(mappings)
+        return {"success": True, "updated": result["success"], "failed": result["failed"], "errors": result.get("errors", [])}
+    except Exception as e:
+        print(f"合并分类错误: {str(e)[:100]}")
         return {"success": False, "error": str(e)}
 
 
@@ -3377,6 +3515,9 @@ async def admin_batch_set_category(request: Request, payload: dict = Depends(ver
         category = (data.get("category") or "").strip()
         if not ids or not category:
             return {"success": False, "error": "请选择记录并指定分类"}
+        allowed = get_category_tree_paths()
+        if allowed is not None and len(allowed) > 0 and category not in allowed:
+            return {"success": False, "error": "只能选择已设置的类目，当前值不在类目树中"}
         supabase = get_supabase_client()
         updated = 0
         for rid in ids:
