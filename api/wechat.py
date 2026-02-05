@@ -50,6 +50,26 @@ LOGIN_ATTEMPTS = {}
 
 security = HTTPBearer()
 
+
+def verify_admin_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """验证管理员Token"""
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(token, ADMIN_SECRET, algorithms=["HS256"])
+        if payload.get("type") != "admin":
+            raise HTTPException(status_code=403, detail="Invalid token")
+
+        timestamp = payload.get("timestamp", 0)
+        if int(time.time()) - timestamp > ADMIN_TOKEN_EXPIRY:
+            raise HTTPException(status_code=403, detail="Token expired")
+
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=403, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=403, detail="Invalid token")
+
+
 # 待确认删除（内存，按 openid）
 PENDING_DELETES = {}
 # 待分类选择（内存，按 openid）
@@ -2781,26 +2801,6 @@ async def report_monthly(request: Request):
 
 
 # ============ 管理后台 ============
-def verify_admin_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """验证管理员Token"""
-    try:
-        token = credentials.credentials
-        payload = jwt.decode(token, ADMIN_SECRET, algorithms=["HS256"])
-        if payload.get("type") != "admin":
-            raise HTTPException(status_code=403, detail="Invalid token")
-        
-        # 检查 Token 是否过期
-        timestamp = payload.get("timestamp", 0)
-        if int(time.time()) - timestamp > ADMIN_TOKEN_EXPIRY:
-            raise HTTPException(status_code=403, detail="Token expired")
-        
-        return payload
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=403, detail="Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=403, detail="Invalid token")
-
-
 @app.get("/api/admin", response_class=HTMLResponse)
 async def admin_page():
     """管理后台页面"""
