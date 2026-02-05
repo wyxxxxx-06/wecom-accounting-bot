@@ -1043,9 +1043,10 @@
             <!-- 表格统计 -->
             <div class="section" id="table_stats">
                 <div class="table-container">
-                    <div class="table-header">
+                    <div class="table-header" style="flex-wrap: wrap; gap: 10px;">
                         <h3 id="tableStatsTitle" style="margin: 0; color: #333; font-size: 18px;">今年所有月份</h3>
                         <button class="btn" id="backBtn" onclick="goBack()" style="width: auto; padding: 10px 24px; display: none;">← 返回</button>
+                        <button class="btn" id="tableStatsRefreshBtn" onclick="loadMonthlyStats(0, true)" style="width: auto; padding: 8px 16px; font-size: 14px;">🔄 刷新</button>
                     </div>
                     <div id="tableStatsContent" style="padding: 25px;">
                         <div id="tableStatsLoading" style="display: none; text-align: center; padding: 40px; color: #999;">⏳ 加载中...</div>
@@ -1321,7 +1322,7 @@
             if (event && event.target) event.target.classList.add('active');
             if (section === 'overview') loadOverview();
             else if (section === 'records') loadRecords();
-            else if (section === 'table_stats') setTimeout(function() { loadMonthlyStats(); }, 0);
+            else if (section === 'table_stats') setTimeout(function() { loadMonthlyStats(0, true); }, 0);
             else if (section === 'stats') loadStats();
             else if (section === 'categories') loadCategories();
             else if (section === 'settings') loadSettings();
@@ -2247,8 +2248,8 @@
         function safeDisplay(el, value) { if (el && el.style) el.style.display = value; }
         function safeText(el, text) { if (el) el.textContent = text; }
 
-        // 加载月度统计
-        async function loadMonthlyStats(retryCount = 0) {
+        // 加载月度统计。useFresh=true 时强制从数据库重新拉取（编辑记录后统计会立即更新）
+        async function loadMonthlyStats(retryCount = 0, useFresh = false) {
             const maxRetries = 2;
             const contentDiv = document.getElementById('tableStatsContent');
             const loadingEl = document.getElementById('tableStatsLoading');
@@ -2266,8 +2267,11 @@
             safeDisplay(monthListEl, 'none');
             safeDisplay(dayListEl, 'none');
             safeDisplay(detailListEl, 'none');
+            const refreshBtn = document.getElementById('tableStatsRefreshBtn');
+            if (refreshBtn) refreshBtn.disabled = true;
             try {
-                const response = await fetchWithAuth('/api/admin/monthly_stats');
+                const url = '/api/admin/monthly_stats' + (useFresh ? '?fresh=1' : '');
+                const response = await fetchWithAuth(url);
                 const data = await response.json();
                 if (data.success) {
                     currentView = 'months';
@@ -2303,15 +2307,17 @@
                 console.error('加载月度统计失败:', e);
                 safeDisplay(loadingEl, 'none');
                 if (retryCount < maxRetries) {
-                    setTimeout(() => loadMonthlyStats(retryCount + 1), 1000 * (retryCount + 1));
+                    setTimeout(() => loadMonthlyStats(retryCount + 1, useFresh), 1000 * (retryCount + 1));
                 } else if (loadingEl) {
                     loadingEl.style.display = 'block';
                     loadingEl.innerHTML = `
                         <div style="color: #e74c3c; margin-bottom: 15px;">❌ 加载失败</div>
                         <div style="color: #666; margin-bottom: 15px; font-size: 12px;">错误: ${(e.message || '未知错误').replace(/</g, '&lt;')}</div>
-                        <button class="btn" onclick="loadMonthlyStats()" style="width: auto; padding: 10px 24px;">重试</button>
+                        <button class="btn" onclick="loadMonthlyStats(0, true)" style="width: auto; padding: 10px 24px;">重试</button>
                     `;
                 }
+            } finally {
+                if (refreshBtn) refreshBtn.disabled = false;
             }
         }
 
@@ -2481,7 +2487,7 @@
                     if (data.success) {
                         showAllCategories = false;
                         const categoryStats = document.getElementById('categoryStats');
-                        categoryStats.style.display = 'block';
+                        safeDisplay(categoryStats, 'block');
                         renderCategoryStats(data, type, ...args);
                     } else {
                         throw new Error(data.error || '加载失败');
@@ -2501,35 +2507,40 @@
         // 渲染分类统计
         function renderCategoryStats(data, type, ...args) {
             const categoryStats = document.getElementById('categoryStats');
+            if (!categoryStats) return;
+            const listYear = (data.categories || []).length;
+            const listMonth = (data.all || []).length;
             let categories = [];
             let title = '';
             let clickable = false;
             
             if (type === 'year') {
-                categories = showAllCategories ? data.categories : data.categories.slice(0, 10);
-                title = `${data.year}年分类支出统计`;
+                categories = (data.categories || []);
+                categories = showAllCategories ? categories : categories.slice(0, 10);
+                title = (data.year || '') + '年分类支出统计';
                 clickable = true;
             } else if (type === 'month') {
-                categories = showAllCategories ? data.all : data.top10;
-                title = `${data.year}年${data.month}月分类支出统计`;
+                categories = showAllCategories ? (data.all || []) : (data.top10 || []);
+                title = (data.year || '') + '年' + (data.month || '') + '月分类支出统计';
                 clickable = true;
             } else if (type === 'date') {
-                categories = data.categories;
-                title = `${data.date} 分类支出统计`;
+                categories = data.categories || [];
+                title = (data.date || '') + ' 分类支出统计';
                 clickable = false;
             }
             
-            const hasMore = (type === 'year' ? data.categories.length : data.all.length) > 10;
+            const totalCount = type === 'year' ? listYear : (type === 'date' ? categories.length : listMonth);
+            const hasMore = totalCount > 10;
             
             categoryStats.innerHTML = `
                 <h4>
                     <span>${title}</span>
                     ${hasMore && !showAllCategories ? `<span class="toggle-btn" onclick="toggleCategoryStats('${type}', ${args.map(a => typeof a === 'string' ? `'${a}'` : a).join(', ')})">
-                        查看全部 (${type === 'year' ? data.categories.length : data.all.length}个分类)
+                        查看全部 (${totalCount}个分类)
                     </span>` : hasMore ? `<span class="toggle-btn" onclick="toggleCategoryStats('${type}', ${args.map(a => typeof a === 'string' ? `'${a}'` : a).join(', ')})">收起</span>` : ''}
                 </h4>
                 <div class="category-list">
-                    ${categories.map((item, index) => {
+                    ${(categories || []).map((item, index) => {
                         const rank = index + 1;
                         const rankClass = rank <= 3 ? 'top3' : '';
                         const clickHandler = clickable ? `onclick="viewCategoryDetails('${item.category}', '${type}', ${args.map(a => typeof a === 'string' ? `'${a}'` : a).join(', ')})"` : '';
