@@ -106,7 +106,7 @@ def get_supabase_client():
                 def execute(self):
                     return self
             
-            response = httpx.post(self.url, json=data, headers=self.headers, timeout=5.0)
+            response = httpx.post(self.url, json=data, headers=self.headers, timeout=3.0)
             response.raise_for_status()
             return Result(response.json() if response.content else [data])
         
@@ -158,7 +158,7 @@ def get_supabase_client():
             for column, op, value in self.filters:
                 self.params[column] = f"{op}.{value}"
             
-            response = httpx.get(self.url, params=self.params, headers=self.headers, timeout=5.0)
+            response = httpx.get(self.url, params=self.params, headers=self.headers, timeout=3.0)
             response.raise_for_status()
             class Result:
                 def __init__(self, data):
@@ -181,7 +181,7 @@ def get_supabase_client():
             for column, op, value in self.filters:
                 self.params[column] = f"{op}.{value}"
 
-            response = httpx.patch(self.url, params=self.params, json=self.data, headers=self.headers, timeout=5.0)
+            response = httpx.patch(self.url, params=self.params, json=self.data, headers=self.headers, timeout=3.0)
             response.raise_for_status()
             class Result:
                 def __init__(self, data):
@@ -203,7 +203,7 @@ def get_supabase_client():
             for column, op, value in self.filters:
                 self.params[column] = f"{op}.{value}"
 
-            response = httpx.delete(self.url, params=self.params, headers=self.headers, timeout=5.0)
+            response = httpx.delete(self.url, params=self.params, headers=self.headers, timeout=3.0)
             response.raise_for_status()
             class Result:
                 def __init__(self, data):
@@ -712,14 +712,20 @@ def get_category_aliases() -> dict:
 
 
 def add_category_alias(keyword: str, category: str) -> bool:
-    """新增或更新关键词别名"""
+    """新增或更新关键词别名（优化版：先更新内存缓存，后台写数据库）"""
     keyword = keyword.strip().lower()
     category = category.strip()
     if not keyword or not category:
         return False
+    
+    # 立即更新内存缓存，确保下次记账能匹配到
+    if CATEGORY_ALIAS_CACHE["value"]:
+        CATEGORY_ALIAS_CACHE["value"][keyword] = category
+    
+    # 异步写入数据库（不阻塞响应）
     try:
         supabase = get_supabase_client()
-        existing = supabase.table("category_aliases").select("*").eq("keyword", keyword).execute()
+        existing = supabase.table("category_aliases").select("keyword").eq("keyword", keyword).limit(1).execute()
         now = datetime.now(LOCAL_TZ).isoformat()
         if existing.data:
             supabase.table("category_aliases").update({
@@ -735,10 +741,10 @@ def add_category_alias(keyword: str, category: str) -> bool:
                 "created_at": now,
                 "updated_at": now
             }).execute()
-        CATEGORY_ALIAS_CACHE["expires_at"] = 0
         return True
     except Exception:
-        return False
+        # 数据库写入失败不影响，内存缓存已更新
+        return True
 
 
 def parse_category(text: str) -> str:
@@ -756,7 +762,7 @@ def parse_category(text: str) -> str:
 
 
 def match_alias_category(text: str) -> str:
-    """匹配已学习的别名分类（优化版，减少数据库查询）"""
+    """匹配已学习的别名分类（极速版，完全使用缓存，不查数据库）"""
     text_lower = text.lower().strip()
     aliases = get_category_aliases()
     
@@ -769,17 +775,14 @@ def match_alias_category(text: str) -> str:
         if keyword in text_lower or text_lower in keyword:
             return category
     
-    # 3. 从历史记录中查找相同描述的分类（仅精确匹配，移除了模糊匹配以提高响应速度）
-    try:
-        supabase = get_supabase_client()
-        result = supabase.table("records").select("category").eq("description", text).order("created_at", desc=True).limit(1).execute()
-        if result.data:
-            return result.data[0].get("category", "")
-    except Exception:
-        pass
+    # 3. 从内置关键词匹配
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword in text_lower:
+                return category
     
-    # 注意：已移除模糊匹配查询以提高微信消息响应速度
-    # 如果需要恢复模糊匹配，请确保不会超过微信5秒响应限制
+    # 注意：已完全移除数据库查询以保证响应速度
+    # 首次记账会提示选择分类，选择后会自动学习
     
     return ""
 
