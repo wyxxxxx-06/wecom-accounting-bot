@@ -933,6 +933,7 @@
             <button class="nav-btn" onclick="showSection('stats')">📊 图表</button>
             <button class="nav-btn" onclick="showSection('import')">📤 导入</button>
             <button class="nav-btn" onclick="showSection('categories')">🏷️ 分类</button>
+            <button class="nav-btn" onclick="showSection('debts')">💰 外债</button>
             <button class="nav-btn" onclick="showSection('settings')">⚙️ 设置</button>
             <button class="nav-btn" onclick="showSection('help')">❓ 说明</button>
         </div>
@@ -1164,6 +1165,56 @@
                 </div>
             </div>
 
+            <!-- 外债 -->
+            <div class="section" id="debts">
+                <div class="table-container">
+                    <div class="table-header" style="flex-wrap: wrap; gap: 15px;">
+                        <h3 style="margin: 0; color: #333; font-size: 18px;">💰 外债（我欠别人）</h3>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <span id="debtsTotal" style="color: #e74c3c; font-weight: bold;">合计：--</span>
+                            <label style="display: flex; align-items: center; gap: 6px; font-size: 14px; color: #666;">
+                                <input type="checkbox" id="debtsShowAll" onchange="loadDebts()"> 显示已还清
+                            </label>
+                            <button class="btn" onclick="loadDebts()" style="width: auto; padding: 8px 16px;">刷新</button>
+                        </div>
+                    </div>
+                    <div style="padding: 20px; border-bottom: 1px solid #e0e0e0;">
+                        <h4 style="margin: 0 0 12px 0; color: #333; font-size: 15px;">新增欠款</h4>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; flex-wrap: wrap;">
+                            <div>
+                                <label style="display: block; margin-bottom: 4px; font-size: 13px; color: #666;">对方姓名/称呼</label>
+                                <input type="text" id="debtName" placeholder="如：张三" style="width: 100%; padding: 10px 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px;">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 4px; font-size: 13px; color: #666;">金额（元）</label>
+                                <input type="number" id="debtAmount" placeholder="0.00" step="0.01" min="0.01" style="width: 100%; padding: 10px 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px;">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 4px; font-size: 13px; color: #666;">备注（选填）</label>
+                                <input type="text" id="debtNote" placeholder="选填" style="width: 100%; padding: 10px 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px;">
+                            </div>
+                            <div>
+                                <button class="btn" onclick="addDebt()" style="width: auto; padding: 10px 24px;">添加</button>
+                            </div>
+                        </div>
+                    </div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>对方</th>
+                                <th>金额（元）</th>
+                                <th>备注</th>
+                                <th>状态</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="debtsTable">
+                        </tbody>
+                    </table>
+                    <div id="debtsEmpty" style="display: none; padding: 40px; text-align: center; color: #999;">暂无外债记录。微信发送「欠 张三 100」可快速记账。</div>
+                </div>
+            </div>
+
             <!-- 设置页面 -->
             <div class="section" id="settings">
                 <div class="table-container">
@@ -1209,13 +1260,14 @@
                                     <th style="padding: 12px; text-align: left; border: 1px solid #e0e0e0;">功能</th>
                                     <th style="padding: 12px; text-align: left; border: 1px solid #e0e0e0;">指令示例</th>
                                 </tr>
-                                <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">记账</td><td style="padding: 12px; border: 1px solid #e0e0e0;">午餐 35 / 打车 50 交通</td></tr>
+                                <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">记账</td><td style="padding: 12px; border: 1px solid #e0e0e0;">午餐 35 / 打车 22 / 早餐8块 / 记一笔 早餐 15</td></tr>
                                 <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">查询统计</td><td style="padding: 12px; border: 1px solid #e0e0e0;">今日 / 本周 / 本月</td></tr>
                                 <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">查看明细</td><td style="padding: 12px; border: 1px solid #e0e0e0;">明细 / 明细 昨天</td></tr>
                                 <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">修改记录</td><td style="padding: 12px; border: 1px solid #e0e0e0;">改 1 描述 金额</td></tr>
                                 <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">删除记录</td><td style="padding: 12px; border: 1px solid #e0e0e0;">删 2 / 删 1-4</td></tr>
                                 <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">补记</td><td style="padding: 12px; border: 1px solid #e0e0e0;">补记 昨天 买菜 30</td></tr>
                                 <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">导出</td><td style="padding: 12px; border: 1px solid #e0e0e0;">导出 本月 / 导出 全部</td></tr>
+                                <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">外债（我欠别人）</td><td style="padding: 12px; border: 1px solid #e0e0e0;">欠 张三 100 / 还 张三 50 / 查询外债</td></tr>
                                 <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">管理后台</td><td style="padding: 12px; border: 1px solid #e0e0e0;">网页</td></tr>
                                 <tr><td style="padding: 12px; border: 1px solid #e0e0e0;">帮助</td><td style="padding: 12px; border: 1px solid #e0e0e0;">帮助 / help / ?</td></tr>
                             </table>
@@ -1229,6 +1281,7 @@
                                 <li><b>图形统计</b>：分类占比图、趋势图</li>
                                 <li><b>批量导入</b>：上传Excel批量修改记录</li>
                                 <li><b>分类管理</b>：查看和重命名分类</li>
+                                <li><b>外债</b>：管理「我欠别人」的欠款，新增、还款、删除</li>
                                 <li><b>设置</b>：自定义帮助回复内容</li>
                             </ul>
                         </div>
@@ -1325,6 +1378,7 @@
             else if (section === 'table_stats') setTimeout(function() { loadMonthlyStats(0, true); }, 0);
             else if (section === 'stats') loadStats();
             else if (section === 'categories') loadCategories();
+            else if (section === 'debts') loadDebts();
             else if (section === 'settings') loadSettings();
         }
 
@@ -1366,6 +1420,104 @@
             if (confirm('确定要恢复默认帮助内容吗？')) {
                 document.getElementById('customHelpText').value = '';
                 saveCustomHelp();
+            }
+        }
+
+        // 外债
+        async function loadDebts() {
+            const showAll = document.getElementById('debtsShowAll').checked;
+            const url = '/api/admin/debts' + (showAll ? '?all=1' : '');
+            try {
+                const response = await fetchWithAuth(url);
+                const data = await response.json();
+                if (!data.success) throw new Error(data.error || '加载失败');
+                const debts = data.debts || [];
+                const total = data.total_active != null ? data.total_active : debts.filter(d => d.status === 'active').reduce((s, d) => s + parseFloat(d.amount || 0), 0);
+                document.getElementById('debtsTotal').textContent = '合计：¥' + total.toFixed(2);
+                const tbody = document.getElementById('debtsTable');
+                const emptyEl = document.getElementById('debtsEmpty');
+                if (debts.length === 0) {
+                    tbody.innerHTML = '';
+                    emptyEl.style.display = 'block';
+                    return;
+                }
+                emptyEl.style.display = 'none';
+                tbody.innerHTML = debts.map(d => {
+                    const amount = parseFloat(d.amount || 0).toFixed(2);
+                    const status = d.status === 'paid' ? '已还清' : '未还';
+                    const statusStyle = d.status === 'paid' ? 'color:#28a745' : 'color:#e74c3c';
+                    const nameEsc = escapeHtml(d.name || '');
+                    const nameAttr = (d.name || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+                    const actions = d.status === 'active'
+                        ? `<button class="btn" data-debt-name="${nameAttr}" onclick="repayDebt(this.getAttribute('data-debt-name'))" style="padding:6px 12px; font-size:13px; margin-right:6px;">还款</button><button class="btn" data-debt-name="${nameAttr}" onclick="deleteDebt(this.getAttribute('data-debt-name'))" style="padding:6px 12px; font-size:13px; background:#dc3545;">删除</button>`
+                        : '-';
+                    return `<tr><td>${nameEsc}</td><td>${amount}</td><td>${escapeHtml(d.note || '')}</td><td style="${statusStyle}">${status}</td><td>${actions}</td></tr>`;
+                }).join('');
+            } catch (e) {
+                console.error('加载外债失败:', e);
+                document.getElementById('debtsTotal').textContent = '合计：--';
+                document.getElementById('debtsTable').innerHTML = '<tr><td colspan="5" style="text-align:center;color:#e74c3c;">加载失败：' + (e.message || '未知错误') + '</td></tr>';
+            }
+        }
+        function escapeHtml(s) {
+            const div = document.createElement('div');
+            div.textContent = s;
+            return div.innerHTML;
+        }
+        async function addDebt() {
+            const name = document.getElementById('debtName').value.trim();
+            const amount = parseFloat(document.getElementById('debtAmount').value);
+            const note = document.getElementById('debtNote').value.trim();
+            if (!name) { alert('请输入对方姓名/称呼'); return; }
+            if (!amount || amount <= 0) { alert('请输入有效金额'); return; }
+            try {
+                const response = await fetchWithAuth('/api/admin/debts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, amount, note })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    document.getElementById('debtName').value = '';
+                    document.getElementById('debtAmount').value = '';
+                    document.getElementById('debtNote').value = '';
+                    loadDebts();
+                    alert('✅ 已添加，当前共欠 ' + name + ' ¥' + (data.total || amount).toFixed(2));
+                } else alert('❌ ' + (data.error || '添加失败'));
+            } catch (e) {
+                alert('❌ ' + (e.message || '添加失败'));
+            }
+        }
+        async function repayDebt(name) {
+            const amountStr = prompt('输入还款金额（元）：', '');
+            if (amountStr == null) return;
+            const amount = parseFloat(amountStr);
+            if (!amount || amount <= 0) { alert('请输入有效金额'); return; }
+            try {
+                const response = await fetchWithAuth('/api/admin/debts/repay', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, amount })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    loadDebts();
+                    if (data.status === 'paid') alert('✅ 已还清欠 ' + name);
+                    else alert('✅ 已还款 ¥' + amount.toFixed(2) + '，还欠 ¥' + (data.balance || 0).toFixed(2));
+                } else alert('❌ ' + (data.error || '还款失败'));
+            } catch (e) {
+                alert('❌ ' + (e.message || '还款失败'));
+            }
+        }
+        async function deleteDebt(name) {
+            if (!confirm('确定删除「' + name + '」的欠款记录吗？删除后不可恢复。')) return;
+            try {
+                const response = await fetchWithAuth('/api/admin/debts?name=' + encodeURIComponent(name), { method: 'DELETE' });
+                const data = await response.json();
+                if (data.success) { loadDebts(); alert('✅ 已删除'); }
+                else alert('❌ ' + (data.error || '删除失败'));
+            } catch (e) {
+                alert('❌ ' + (e.message || '删除失败'));
             }
         }
 
