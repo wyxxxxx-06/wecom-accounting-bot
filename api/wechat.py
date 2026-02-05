@@ -109,7 +109,7 @@ def get_supabase_client():
                 def execute(self):
                     return self
             
-            response = httpx.post(self.url, json=data, headers=self.headers, timeout=3.0)
+            response = httpx.post(self.url, json=data, headers=self.headers, timeout=8.0)
             response.raise_for_status()
             return Result(response.json() if response.content else [data])
         
@@ -161,7 +161,7 @@ def get_supabase_client():
             for column, op, value in self.filters:
                 self.params[column] = f"{op}.{value}"
             
-            response = httpx.get(self.url, params=self.params, headers=self.headers, timeout=3.0)
+            response = httpx.get(self.url, params=self.params, headers=self.headers, timeout=8.0)
             response.raise_for_status()
             class Result:
                 def __init__(self, data):
@@ -184,7 +184,7 @@ def get_supabase_client():
             for column, op, value in self.filters:
                 self.params[column] = f"{op}.{value}"
 
-            response = httpx.patch(self.url, params=self.params, json=self.data, headers=self.headers, timeout=3.0)
+            response = httpx.patch(self.url, params=self.params, json=self.data, headers=self.headers, timeout=8.0)
             response.raise_for_status()
             class Result:
                 def __init__(self, data):
@@ -206,7 +206,7 @@ def get_supabase_client():
             for column, op, value in self.filters:
                 self.params[column] = f"{op}.{value}"
 
-            response = httpx.delete(self.url, params=self.params, headers=self.headers, timeout=3.0)
+            response = httpx.delete(self.url, params=self.params, headers=self.headers, timeout=8.0)
             response.raise_for_status()
             class Result:
                 def __init__(self, data):
