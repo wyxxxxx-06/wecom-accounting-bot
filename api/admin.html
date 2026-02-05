@@ -2433,6 +2433,7 @@
                     
                     // 加载日期分类统计（不等待，失败不影响主流程）
                     loadCategoryStats('date', dateStr).catch(e => console.log('分类统计加载失败，忽略'));
+                    }
                 } else {
                     throw new Error(data.error || '加载失败');
                 }
