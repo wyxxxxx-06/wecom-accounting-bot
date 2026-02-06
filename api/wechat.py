@@ -1714,12 +1714,7 @@ def merge_categories_to_tree(mappings: list) -> dict:
 
 
 def get_all_categories() -> list:
-    """获取可选分类：若已设置三级类目树则只返回树中的路径；否则从记录中汇总（兼容旧逻辑）"""
-    tree_paths = get_category_tree_paths()
-    if tree_paths is not None and len(tree_paths) > 0:
-        CATEGORY_LIST_CACHE["value"] = sorted(tree_paths)
-        CATEGORY_LIST_CACHE["expires_at"] = int(time.time()) + CATEGORY_LIST_CACHE_TTL
-        return sorted(tree_paths)
+    """获取所有已使用的分类（从记录汇总）"""
     now = int(time.time())
     if CATEGORY_LIST_CACHE["value"] and now < CATEGORY_LIST_CACHE["expires_at"]:
         return CATEGORY_LIST_CACHE["value"]
@@ -1833,6 +1828,70 @@ def parse_category_excel(file_bytes: bytes) -> dict:
         return {"renames": renames}
     except Exception as e:
         print(f"解析分类 Excel 错误: {str(e)[:100]}")
+        return {"error": "parse_failed"}
+
+
+def build_category_mapping_excel_bytes() -> bytes:
+    """导出「分类映射表」模板：原分类、新分类。新分类预填为原分类，用户可改为正餐/出行等以合并；删掉某行则该类目上传后为待处理。"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "分类映射"
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="4F81BD")
+    ws.append(["使用说明"])
+    ws.append(["1. 本表为当前所有类目。修改「新分类」列即可合并：如把 早餐、晚餐 的新分类都改为 正餐"])
+    ws.append(["2. 也可用单列写「新分类----原分类」，如 正餐----早餐、出行----打车（一行一个）"])
+    ws.append(["3. 若删除某一行，上传后该分类的记录会进入「待处理」，需在网页上为每组选择要归入的分类"])
+    ws.append(["4. 不要删表头"])
+    ws.append([])
+    ws.append(["原分类", "新分类"])
+    for c in ws[ws.max_row]:
+        c.font = header_font
+        c.fill = header_fill
+    stats = get_category_stats()
+    for item in stats:
+        ws.append([item["category"], item["category"]])
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return bio.read()
+
+
+def parse_category_mapping_excel(file_bytes: bytes) -> dict:
+    """解析分类映射表 Excel。支持两列「原分类、新分类」或单列「新分类----原分类」。返回 mappings 和文件里出现的原分类集合。"""
+    try:
+        wb = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+        sheet_name = "分类映射" if "分类映射" in wb.sheetnames else (wb.sheetnames[0] if wb.sheetnames else "")
+        if not sheet_name:
+            return {"error": "no_sheet"}
+        ws = wb[sheet_name]
+        rows = list(ws.iter_rows(values_only=True))
+        wb.close()
+        mappings = []
+        in_header = set()
+        for row in rows:
+            if not row:
+                continue
+            cell0 = str(row[0] or "").strip()
+            if not cell0 or cell0 in ("原分类", "新分类", "新分类----原分类"):
+                continue
+            if "----" in cell0:
+                parts = cell0.split("----", 1)
+                new_cat, orig = (parts[0] or "").strip(), (parts[1] or "").strip()
+                if not orig:
+                    orig = new_cat
+                if not new_cat:
+                    new_cat = orig
+            else:
+                orig = cell0
+                new_cat = str(row[1] or "").strip() if len(row) >= 2 else orig
+                if not new_cat:
+                    new_cat = orig
+            in_header.add(orig)
+            mappings.append({"from": orig, "to": new_cat})
+        return {"mappings": mappings, "origins_in_file": list(in_header)}
+    except Exception as e:
+        print(f"解析映射表错误: {str(e)[:100]}")
         return {"error": "parse_failed"}
 
 
@@ -3111,9 +3170,6 @@ async def admin_update_record(
         else:
             created_at = None
         
-        allowed = get_category_tree_paths()
-        if allowed is not None and len(allowed) > 0 and category not in allowed:
-            return {"success": False, "error": "只能选择已设置的类目，当前值不在类目树中"}
         update_data = {
             "description": description,
             "amount": amount,
@@ -3303,12 +3359,7 @@ async def admin_categories(payload: dict = Depends(verify_admin_token)):
             }
             for cat, stats in sorted(category_stats.items())
         ]
-        out = {"success": True, "categories": categories}
-        paths = get_category_tree_paths()
-        if paths is not None:
-            out["tree"] = paths_to_tree(paths)
-            out["paths"] = sorted(paths)
-        return out
+        return {"success": True, "categories": categories}
     except Exception as e:
         print(f"分类列表错误: {str(e)[:100]}")
         return {"success": False, "error": str(e)}
@@ -3349,6 +3400,28 @@ async def admin_merge_categories(request: Request, payload: dict = Depends(verif
             return {"success": False, "error": "请提供 mappings 数组"}
         result = merge_categories_to_tree(mappings)
         return {"success": True, "updated": result["success"], "failed": result["failed"], "errors": result.get("errors", [])}
+    except Exception as e:
+        print(f"合并分类错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/admin/categories/merge_simple")
+async def admin_merge_categories_simple(request: Request, payload: dict = Depends(verify_admin_token)):
+    """把多个分散的分类合并成一个。body: { "merge_from": ["早饭","晚饭"], "merge_to": "正餐" }，记录和映射都会更新过去。"""
+    try:
+        data = await request.json()
+        merge_from = data.get("merge_from", [])
+        merge_to = (data.get("merge_to") or "").strip()
+        if not merge_to:
+            return {"success": False, "error": "请填写「合并为」的目标分类名"}
+        if not isinstance(merge_from, list) or len(merge_from) == 0:
+            return {"success": False, "error": "请至少选择一个要合并的分类"}
+        merge_from = [str(x).strip() for x in merge_from if str(x).strip() and str(x).strip() != merge_to]
+        if not merge_from:
+            return {"success": False, "error": "要合并的分类不能为空且不能与目标相同"}
+        mappings = [{"from": name, "to": merge_to} for name in merge_from]
+        result = merge_categories_to_tree(mappings)
+        return {"success": True, "updated": result["success"], "message": f"已将 {len(merge_from)} 个分类合并为「{merge_to}」，共更新 {result['success']} 条记录"}
     except Exception as e:
         print(f"合并分类错误: {str(e)[:100]}")
         return {"success": False, "error": str(e)}
@@ -3488,6 +3561,46 @@ async def admin_export_categories(payload: dict = Depends(verify_admin_token)):
         return Response(content="error", status_code=500)
 
 
+@app.get("/api/admin/export_category_mapping")
+async def admin_export_category_mapping(payload: dict = Depends(verify_admin_token)):
+    """下载分类映射表模板（含当前所有类目），编辑后上传用于合并；删掉的行上传后为待处理"""
+    try:
+        data = build_category_mapping_excel_bytes()
+        from urllib.parse import quote
+        filename = "分类映射表.xlsx"
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}',
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        }
+        return Response(content=data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
+    except Exception as e:
+        print(f"导出映射表错误: {str(e)[:100]}")
+        return Response(content="error", status_code=500)
+
+
+@app.post("/api/admin/import_category_mapping")
+async def admin_import_category_mapping(file: UploadFile = File(...), payload: dict = Depends(verify_admin_token)):
+    """上传分类映射表：按表合并；表中被删掉的原分类其记录列为待处理，返回待处理列表供前端按组设置"""
+    try:
+        file_bytes = await file.read()
+        parsed = parse_category_mapping_excel(file_bytes)
+        if parsed.get("error"):
+            return {"success": False, "error": parsed["error"], "deleted": []}
+        mappings = parsed.get("mappings", [])
+        origins_in_file = set(parsed.get("origins_in_file", []))
+        stats_before = {x["category"]: x["count"] for x in get_category_stats()}
+        deleted = [{"category": cat, "count": stats_before.get(cat, 0)} for cat in stats_before if cat not in origins_in_file]
+        to_merge = [m for m in mappings if (m.get("from") or "").strip() != (m.get("to") or "").strip()]
+        updated = 0
+        if to_merge:
+            result = merge_categories_to_tree(to_merge)
+            updated = result.get("success", 0)
+        return {"success": True, "updated": updated, "deleted": deleted, "message": f"已合并更新 {updated} 条记录" + ("；以下类目已从表中删除，请为每组设置新分类" if deleted else "")}
+    except Exception as e:
+        print(f"导入映射表错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e), "deleted": []}
+
+
 @app.post("/api/admin/import_categories")
 async def admin_import_categories(file: UploadFile = File(...), payload: dict = Depends(verify_admin_token)):
     """管理后台：上传分类表 Excel 批量重命名"""
@@ -3515,9 +3628,6 @@ async def admin_batch_set_category(request: Request, payload: dict = Depends(ver
         category = (data.get("category") or "").strip()
         if not ids or not category:
             return {"success": False, "error": "请选择记录并指定分类"}
-        allowed = get_category_tree_paths()
-        if allowed is not None and len(allowed) > 0 and category not in allowed:
-            return {"success": False, "error": "只能选择已设置的类目，当前值不在类目树中"}
         supabase = get_supabase_client()
         updated = 0
         for rid in ids:
