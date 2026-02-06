@@ -759,6 +759,12 @@
         .btn-secondary:hover {
             background: #5a6268;
         }
+        .cat-toggle { cursor: pointer; user-select: none; margin-right: 6px; display: inline-block; width: 18px; text-align: center; }
+        .cat-toggle.expanded::before { content: '▼'; }
+        .cat-toggle:not(.expanded)::before { content: '▶'; }
+        tr.cat-child { display: none; }
+        tr.cat-child.visible { display: table-row; }
+        tr.cat-l1 td:first-child { font-weight: 600; color: #333; }
         #uploadResult {
             margin-top: 25px;
             padding: 15px;
@@ -1179,7 +1185,7 @@
                         <div id="categoryPendingList"></div>
                     </div>
                     <div class="table-header" style="flex-wrap: wrap; gap: 15px;">
-                        <h3 style="margin: 0; color: #333; font-size: 18px;">分类列表</h3>
+                        <h3 style="margin: 0; color: #333; font-size: 18px;">分类列表（按层级展开/收起）</h3>
                         <button class="btn" onclick="showAddCategoryModal()" style="width: auto; padding: 10px 24px;" id="addCategoryBtn">新增分类</button>
                         <button class="btn" onclick="downloadCategoryExcel()" style="width: auto; padding: 10px 24px; background: #28a745;">下载分类表</button>
                         <span style="display: inline-flex; align-items: center; gap: 8px;">
@@ -1363,7 +1369,15 @@
             <input type="time" id="editTime" placeholder="时间" required>
             <input type="text" id="editDescription" placeholder="描述" required>
             <input type="number" step="0.01" id="editAmount" placeholder="金额" required>
-            <select id="editCategory" class="category-select" required style="width: 100%;"></select>
+            <div id="editCategoryFlatWrap"><select id="editCategory" class="category-select" required style="width: 100%;"></select></div>
+            <div id="editCategoryCascadeWrap" style="display: none;">
+                <label style="font-size: 12px; color: #666;">一级</label>
+                <select id="editCategoryL1" class="category-select" style="width: 100%; margin-bottom: 6px;"></select>
+                <label style="font-size: 12px; color: #666;">二级（选填）</label>
+                <select id="editCategoryL2" class="category-select" style="width: 100%; margin-bottom: 6px;"><option value="">— 不选 —</option></select>
+                <label style="font-size: 12px; color: #666;">三级（选填）</label>
+                <select id="editCategoryL3" class="category-select" style="width: 100%;"><option value="">— 不选 —</option></select>
+            </div>
             <div class="btn-group">
                 <button class="btn" onclick="saveRecord()">保存</button>
                 <button class="btn btn-secondary" onclick="closeEditModal()">取消</button>
@@ -1851,21 +1865,24 @@
             }
         }
         
-        // 加载分类列表用于筛选和批量改分类下拉
+        // 加载分类列表用于筛选和批量改分类下拉（有 tree 时用 paths，显示用层级）
         async function loadCategoriesForFilter() {
             try {
                 const response = await fetchWithAuth('/api/admin/categories');
                 const data = await response.json();
                 if (data.success && data.categories) {
-                    const cats = (data.categories || []).map(c => typeof c === 'string' ? c : c.category);
+                    var list = (data.paths && data.paths.length) ? data.paths : (data.categories || []).map(c => typeof c === 'string' ? c : c.category);
+                    var display = function(v) { return (v || '').indexOf('|') >= 0 ? pathDisplay(v) : v; };
+                    if (data.tree) window.categoryTreeData.tree = data.tree;
+                    if (data.paths) window.categoryTreeData.paths = data.paths;
                     const sel = document.getElementById('categoryFilter');
                     if (sel) {
                         const cur = Array.from(sel.selectedOptions).map(o => o.value);
-                        sel.innerHTML = '<option value="">全部分类</option>' + cats.map(c => '<option value="' + (c||'').replace(/"/g, '&quot;') + '">' + escapeHtml(c) + '</option>').join('');
+                        sel.innerHTML = '<option value="">全部分类</option>' + list.map(c => '<option value="' + (c||'').replace(/"/g, '&quot;') + '">' + escapeHtml(display(c)) + '</option>').join('');
                         cur.forEach(v => { const o = sel.querySelector('option[value="' + (v||'').replace(/"/g, '&quot;') + '"]'); if (o) o.selected = true; });
                     }
                     var batchSel = document.getElementById('batchCategorySelect');
-                    if (batchSel) batchSel.innerHTML = '<option value="">选择分类</option>' + cats.map(c => '<option value="' + (c||'').replace(/"/g, '&quot;') + '">' + escapeHtml(c) + '</option>').join('');
+                    if (batchSel) batchSel.innerHTML = '<option value="">选择分类</option>' + list.map(c => '<option value="' + (c||'').replace(/"/g, '&quot;') + '">' + escapeHtml(display(c)) + '</option>').join('');
                 }
             } catch (e) { console.error('加载分类列表失败:', e); }
         }
@@ -2016,20 +2033,59 @@
             document.getElementById('editTime').value = time;
             document.getElementById('editDescription').value = description;
             document.getElementById('editAmount').value = amount;
-            var editCatSel = document.getElementById('editCategory');
-            if (editCatSel.options.length <= 1) {
-                try {
-                    var r = await fetchWithAuth('/api/admin/categories');
-                    var d = await r.json();
-                    if (d.success && d.categories) {
-                        editCatSel.innerHTML = '<option value="">选择分类</option>' + (d.categories || []).map(function(c) {
-                            var name = typeof c === 'string' ? c : c.category;
-                            return '<option value="' + (name||'').replace(/"/g, '&quot;') + '">' + (name||'').replace(/</g, '&lt;') + '</option>';
-                        }).join('');
+            var tree = window.categoryTreeData.tree || {};
+            var paths = window.categoryTreeData.paths || [];
+            if (Object.keys(tree).length > 0) {
+                document.getElementById('editCategoryFlatWrap').style.display = 'none';
+                document.getElementById('editCategoryCascadeWrap').style.display = 'block';
+                var L1 = document.getElementById('editCategoryL1');
+                var L2 = document.getElementById('editCategoryL2');
+                var L3 = document.getElementById('editCategoryL3');
+                var l1Keys = Object.keys(tree).sort();
+                L1.innerHTML = '<option value="">请选一级</option>' + l1Keys.map(function(k) { return '<option value="' + (k||'').replace(/"/g, '&quot;') + '">' + escapeHtml(k) + '</option>'; }).join('');
+                var parts = (category || '').split('|');
+                L1.value = parts[0] || '';
+                L1.onchange = function() {
+                    var k = L1.value;
+                    var sub = tree[k];
+                    var l2Keys = sub && typeof sub === 'object' ? Object.keys(sub).sort() : [];
+                    L2.innerHTML = '<option value="">— 不选 —</option>' + l2Keys.map(function(k2) { return '<option value="' + (k2||'').replace(/"/g, '&quot;') + '">' + escapeHtml(k2) + '</option>'; }).join('');
+                    L3.innerHTML = '<option value="">— 不选 —</option>';
+                    L2.value = parts[1] || '';
+                    if (parts[1] && sub && sub[parts[1]]) {
+                        var arr = sub[parts[1]];
+                        var l3List = Array.isArray(arr) ? arr : (arr && typeof arr === 'object' ? Object.keys(arr) : []);
+                        L3.innerHTML = '<option value="">— 不选 —</option>' + l3List.map(function(k3) { return '<option value="' + (k3||'').replace(/"/g, '&quot;') + '">' + escapeHtml(k3) + '</option>'; }).join('');
+                        L3.value = parts[2] || '';
                     }
-                } catch (e) {}
+                };
+                L2.onchange = function() {
+                    var k1 = L1.value, k2 = L2.value;
+                    var arr = tree[k1] && tree[k1][k2];
+                    var l3List = Array.isArray(arr) ? arr : (arr && typeof arr === 'object' ? Object.keys(arr) : []);
+                    L3.innerHTML = '<option value="">— 不选 —</option>' + l3List.map(function(k3) { return '<option value="' + (k3||'').replace(/"/g, '&quot;') + '">' + escapeHtml(k3) + '</option>'; }).join('');
+                    L3.value = '';
+                };
+                L1.dispatchEvent(new Event('change'));
+                L2.value = parts[1] || '';
+                L2.dispatchEvent(new Event('change'));
+                L3.value = parts[2] || '';
+            } else {
+                document.getElementById('editCategoryFlatWrap').style.display = 'block';
+                document.getElementById('editCategoryCascadeWrap').style.display = 'none';
+                var editCatSel = document.getElementById('editCategory');
+                if (editCatSel.options.length <= 1) {
+                    try {
+                        var r = await fetchWithAuth('/api/admin/categories');
+                        var d = await r.json();
+                        if (d.success && d.categories) {
+                            var list = (d.paths && d.paths.length) ? d.paths : (d.categories || []).map(function(c) { var n = typeof c === 'string' ? c : c.category; return n; });
+                            editCatSel.innerHTML = '<option value="">选择分类</option>' + list.map(function(n) { return '<option value="' + (n||'').replace(/"/g, '&quot;') + '">' + escapeHtml((n||'').indexOf('|') >= 0 ? pathDisplay(n) : n) + '</option>'; }).join('');
+                        }
+                    } catch (e) {}
+                }
+                editCatSel.value = category || '';
             }
-            editCatSel.value = category || '';
             document.getElementById('editModal').classList.add('active');
         }
 
@@ -2039,12 +2095,23 @@
 
         async function saveRecord() {
             const id = document.getElementById('editId').value;
+            var categoryVal = '';
+            var cascadeWrap = document.getElementById('editCategoryCascadeWrap');
+            if (cascadeWrap && cascadeWrap.style.display !== 'none') {
+                var l1 = document.getElementById('editCategoryL1').value;
+                var l2 = document.getElementById('editCategoryL2').value;
+                var l3 = document.getElementById('editCategoryL3').value;
+                if (!l1) { alert('请选择一级分类'); return; }
+                categoryVal = l1 + (l2 ? '|' + l2 : '') + (l3 ? '|' + l3 : '');
+            } else {
+                categoryVal = document.getElementById('editCategory').value;
+            }
             const data = {
                 date: document.getElementById('editDate').value,
                 time: document.getElementById('editTime').value,
                 description: document.getElementById('editDescription').value,
                 amount: parseFloat(document.getElementById('editAmount').value),
-                category: document.getElementById('editCategory').value
+                category: categoryVal
             };
             
             try {
@@ -2451,35 +2518,54 @@
             }
         }
 
-        // 加载分类
+        window.categoryTreeData = { tree: {}, paths: [], pathStats: {} };
+        function toggleCatRow(l1) {
+            var rows = document.querySelectorAll('tr.cat-child[data-l1="' + (l1||'').replace(/"/g, '&quot;') + '"]');
+            var expanded = rows.length && rows[0].classList.contains('visible');
+            rows.forEach(function(r) { r.classList.toggle('visible', !expanded); });
+            var tgl = document.querySelector('.cat-toggle[data-l1="' + (l1||'').replace(/"/g, '&quot;') + '"]');
+            if (tgl) tgl.classList.toggle('expanded', !expanded);
+        }
+        function pathDisplay(p) { return (p || '').replace(/\|/g, ' > '); }
+        // 加载分类（有 tree 时按层级展示，可展开/收起）
         async function loadCategories() {
             try {
                 const response = await fetchWithAuth('/api/admin/categories');
                 const data = await response.json();
                 if (data.success) {
                     const cats = data.categories || [];
-                    const names = cats.map(c => typeof c === 'string' ? c : c.category);
+                    const pathStats = {};
+                    cats.forEach(function(c) {
+                        var p = typeof c === 'string' ? c : c.category;
+                        pathStats[p] = { count: c.count || 0, amount: c.amount || 0 };
+                    });
+                    window.categoryTreeData = { tree: data.tree || {}, paths: data.paths || [], pathStats: pathStats };
+                    const tree = data.tree || {};
+                    const paths = data.paths || [];
                     const tbody = document.getElementById('categoriesTable');
                     if (cats.length === 0) {
                         tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; padding: 40px; color: #999;">暂无分类</td></tr>';
+                    } else if (Object.keys(tree).length > 0) {
+                        var html = '';
+                        Object.keys(tree).sort().forEach(function(l1) {
+                            var childPaths = paths.filter(function(p) { return p === l1 || p.indexOf(l1 + '|') === 0; });
+                            var sumCount = 0, sumAmount = 0;
+                            childPaths.forEach(function(p) { var s = pathStats[p]; if (s) { sumCount += s.count; sumAmount += s.amount; } });
+                            var l1Esc = (l1||'').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                            html += '<tr class="cat-l1"><td><span class="cat-toggle" data-l1="' + l1Esc + '" onclick="toggleCatRow(\'' + l1Esc + '\')"></span>' + escapeHtml(l1) + '</td><td>' + sumCount + '</td><td style="font-weight: 600; color: #e74c3c;">¥' + sumAmount.toFixed(2) + '</td><td></td></tr>';
+                            childPaths.sort().forEach(function(p) {
+                                var s = pathStats[p] || {};
+                                var pEsc = (p||'').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                                html += '<tr class="cat-child" data-l1="' + l1Esc + '"><td style="padding-left: 28px;">' + escapeHtml(pathDisplay(p)) + '</td><td>' + (s.count||0) + '</td><td style="font-weight: 600; color: #e74c3c;">¥' + (s.amount||0).toFixed(2) + '</td><td><button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px;" onclick="renameCategory(\'' + pEsc + '\')">重命名</button> <button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px; background: #dc3545;" onclick="deleteCategory(\'' + pEsc + '\', ' + (s.count||0) + ')">删除</button></td></tr>';
+                            });
+                        });
+                        tbody.innerHTML = html;
                     } else {
                         tbody.innerHTML = cats.map(c => {
                             const cat = typeof c === 'string' ? c : c.category;
                             var catEsc = (cat||'').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                            return `<tr>
-                                <td style="font-weight: 600; color: #667eea;">${escapeHtml(cat)}</td>
-                                <td>${c.count || 0}</td>
-                                <td style="font-weight: 600; color: #e74c3c;">¥${(c.amount||0).toFixed(2)}</td>
-                                <td>
-                                    <button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px;" onclick="renameCategory('${catEsc}')">重命名</button>
-                                    <button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px; background: #dc3545;" onclick="deleteCategory('${catEsc}', ${c.count||0})">删除</button>
-                                </td>
-                            </tr>`;
+                            return '<tr><td style="font-weight: 600; color: #667eea;">' + escapeHtml(cat) + '</td><td>' + (c.count||0) + '</td><td style="font-weight: 600; color: #e74c3c;">¥' + (c.amount||0).toFixed(2) + '</td><td><button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px;" onclick="renameCategory(\'' + catEsc + '\')">重命名</button> <button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px; background: #dc3545;" onclick="deleteCategory(\'' + catEsc + '\', ' + (c.count||0) + ')">删除</button></td></tr>';
                         }).join('');
-                    }
-                    var mergeSel = document.getElementById('mergeFromSelect');
-                    if (mergeSel) {
-                        mergeSel.innerHTML = names.map(n => '<option value="' + (n||'').replace(/"/g, '&quot;') + '">' + escapeHtml(n) + '</option>').join('');
                     }
                 }
             } catch (e) { console.error('加载分类失败:', e); }
@@ -2629,11 +2715,12 @@
                 targetSel.size = 1;
                 fetchWithAuth('/api/admin/categories').then(r => r.json()).then(function(data) {
                     if (data.success && data.categories) {
-                        allCategoriesForDelete = data.categories.map(function(c) { return typeof c === 'string' ? c : c.category; });
-                        allCategoriesForDelete.filter(function(c) { return c && c !== deleteCategoryName; }).forEach(function(c) {
+                        var list = (data.paths && data.paths.length) ? data.paths : data.categories.map(function(c) { return typeof c === 'string' ? c : c.category; });
+                        allCategoriesForDelete = list;
+                        list.filter(function(c) { return c && c !== deleteCategoryName; }).forEach(function(c) {
                             var opt = document.createElement('option');
                             opt.value = c;
-                            opt.textContent = c;
+                            opt.textContent = (c || '').indexOf('|') >= 0 ? pathDisplay(c) : c;
                             targetSel.appendChild(opt);
                         });
                     }
