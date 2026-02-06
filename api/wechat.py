@@ -800,10 +800,10 @@ def get_category_aliases() -> dict:
 
 
 def add_category_alias(keyword: str, category: str) -> bool:
-    """新增或更新关键词别名（优化版：先更新内存缓存，后台写数据库）"""
+    """新增或更新关键词别名。过短(≤1字)不学习，避免误触（如「虾」误学成会员类）。"""
     keyword = keyword.strip().lower()
     category = category.strip()
-    if not keyword or not category:
+    if not keyword or not category or len(keyword) <= 1:
         return False
     
     # 立即更新内存缓存，确保下次记账能匹配到
@@ -850,28 +850,26 @@ def parse_category(text: str) -> str:
 
 
 def match_alias_category(text: str) -> str:
-    """匹配已学习的别名分类（极速版，完全使用缓存，不查数据库）"""
+    """匹配已学习的别名分类。只做「关键词在用户输入里」的匹配，取最长关键词；过短(≤1字)不自动应用，让用户选。"""
     text_lower = text.lower().strip()
     aliases = get_category_aliases()
-    
-    # 1. 精确匹配（优先）- 从别名缓存
+    # 1. 精确匹配
     if text_lower in aliases:
         return aliases[text_lower]
-    
-    # 2. 包含匹配 - 从别名缓存
-    for keyword, category in aliases.items():
-        if keyword in text_lower or text_lower in keyword:
-            return category
-    
-    # 3. 从内置关键词匹配
+    # 2. 只匹配「关键词在用户输入里」，且取最长（避免「虾」误匹配「虾皮」）
+    best_keyword = None
+    for keyword in aliases:
+        if keyword in text_lower and (best_keyword is None or len(keyword) > len(best_keyword)):
+            best_keyword = keyword
+    if best_keyword is not None:
+        if len(best_keyword) <= 1:
+            return ""  # 单字不自动归，给用户选择机会
+        return aliases[best_keyword]
+    # 3. 内置关键词（同样取最长）
     for category, keywords in CATEGORY_KEYWORDS.items():
         for keyword in keywords:
             if keyword in text_lower:
                 return category
-    
-    # 注意：已完全移除数据库查询以保证响应速度
-    # 首次记账会提示选择分类，选择后会自动学习
-    
     return ""
 
 
@@ -3381,7 +3379,9 @@ async def admin_categories(payload: dict = Depends(verify_admin_token)):
             }
             for cat, stats in sorted(category_stats.items())
         ]
-        return {"success": True, "categories": categories}
+        paths = list(category_stats.keys())
+        tree = paths_to_tree(paths) if paths else {}
+        return {"success": True, "categories": categories, "tree": tree, "paths": sorted(paths)}
     except Exception as e:
         print(f"分类列表错误: {str(e)[:100]}")
         return {"success": False, "error": str(e)}
