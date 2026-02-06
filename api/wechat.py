@@ -850,22 +850,14 @@ def parse_category(text: str) -> str:
 
 
 def match_alias_category(text: str) -> str:
-    """匹配已学习的别名分类。只做「关键词在用户输入里」的匹配，取最长关键词；过短(≤1字)不自动应用，让用户选。"""
+    """别名只做完全匹配才自动归类；否则不自动归，让用户选择。内置关键词仍可用包含匹配。"""
     text_lower = text.lower().strip()
     aliases = get_category_aliases()
-    # 1. 精确匹配
+    # 1. 完全匹配：仅当用户输入与某关键词完全一致时才自动归到该分类
     if text_lower in aliases:
         return aliases[text_lower]
-    # 2. 只匹配「关键词在用户输入里」，且取最长（避免「虾」误匹配「虾皮」）
-    best_keyword = None
-    for keyword in aliases:
-        if keyword in text_lower and (best_keyword is None or len(keyword) > len(best_keyword)):
-            best_keyword = keyword
-    if best_keyword is not None:
-        if len(best_keyword) <= 1:
-            return ""  # 单字不自动归，给用户选择机会
-        return aliases[best_keyword]
-    # 3. 内置关键词（同样取最长）
+    # 2. 不再做「关键词在输入里」的包含匹配，避免乱分类
+    # 3. 内置关键词仍用包含匹配（可选：后续也可改为完全匹配）
     for category, keywords in CATEGORY_KEYWORDS.items():
         for keyword in keywords:
             if keyword in text_lower:
@@ -1711,8 +1703,46 @@ def merge_categories_to_tree(mappings: list) -> dict:
     return {"success": updated, "failed": failed, "errors": errors}
 
 
+def get_category_presets() -> list:
+    """从设置中读取手动添加的类目预设（尚未有记录也可显示）"""
+    raw = get_setting("category_presets", "").strip()
+    if not raw:
+        return []
+    try:
+        out = json.loads(raw)
+        return [str(p).strip() for p in out if str(p).strip()] if isinstance(out, list) else []
+    except Exception:
+        return []
+
+
+def add_category_preset(path: str) -> bool:
+    """添加一个类目预设（网页端「新增类目」用）"""
+    path = (path or "").strip()
+    if not path:
+        return False
+    presets = get_category_presets()
+    if path in presets:
+        return True
+    presets.append(path)
+    presets = sorted(set(presets))
+    ok = set_setting("category_presets", json.dumps(presets, ensure_ascii=False))
+    if ok:
+        CATEGORY_LIST_CACHE["expires_at"] = 0
+    return ok
+
+
+def remove_category_preset(path: str) -> bool:
+    """移除类目预设（仅移除预设，不删记录）"""
+    path = (path or "").strip()
+    presets = [p for p in get_category_presets() if p != path]
+    ok = set_setting("category_presets", json.dumps(presets, ensure_ascii=False))
+    if ok:
+        CATEGORY_LIST_CACHE["expires_at"] = 0
+    return ok
+
+
 def get_all_categories() -> list:
-    """获取所有已使用的分类（从记录汇总）"""
+    """获取所有分类 = 记录中出现的 + 手动添加的预设"""
     now = int(time.time())
     if CATEGORY_LIST_CACHE["value"] and now < CATEGORY_LIST_CACHE["expires_at"]:
         return CATEGORY_LIST_CACHE["value"]
@@ -1724,6 +1754,9 @@ def get_all_categories() -> list:
             cat = r.get("category", "").strip()
             if cat:
                 categories.add(cat)
+        for p in get_category_presets():
+            if p:
+                categories.add(p)
         sorted_categories = sorted(list(categories))
         CATEGORY_LIST_CACHE["value"] = sorted_categories
         CATEGORY_LIST_CACHE["expires_at"] = now + CATEGORY_LIST_CACHE_TTL
@@ -3358,11 +3391,10 @@ async def admin_stats(
 
 @app.get("/api/admin/categories")
 async def admin_categories(payload: dict = Depends(verify_admin_token)):
-    """分类列表"""
+    """分类列表（含记录中的分类 + 手动添加的预设，预设无记录时 count/amount 为 0）"""
     try:
         records = get_records()
         category_stats = {}
-        
         for r in records:
             cat = r.get("category", "其他")
             amount = float(r.get("amount", 0))
@@ -3370,15 +3402,10 @@ async def admin_categories(payload: dict = Depends(verify_admin_token)):
                 category_stats[cat] = {"count": 0, "amount": 0}
             category_stats[cat]["count"] += 1
             category_stats[cat]["amount"] += amount
-        
-        categories = [
-            {
-                "category": cat,
-                "count": stats["count"],
-                "amount": stats["amount"]
-            }
-            for cat, stats in sorted(category_stats.items())
-        ]
+        for p in get_category_presets():
+            if p and p not in category_stats:
+                category_stats[p] = {"count": 0, "amount": 0}
+        categories = [{"category": cat, "count": stats["count"], "amount": stats["amount"]} for cat, stats in sorted(category_stats.items())]
         paths = list(category_stats.keys())
         tree = paths_to_tree(paths) if paths else {}
         return {"success": True, "categories": categories, "tree": tree, "paths": sorted(paths)}
@@ -3467,6 +3494,33 @@ async def admin_rename_category(
             return {"success": False, "error": result.get("error", "重命名失败")}
     except Exception as e:
         print(f"重命名分类错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/admin/categories/add_preset")
+async def admin_add_category_preset(request: Request, payload: dict = Depends(verify_admin_token)):
+    """网页端新增类目（可多级，如 正餐|晚餐|外卖）。body: { "path": "正餐|晚餐|外卖" }"""
+    try:
+        data = await request.json()
+        path = (data.get("path") or "").strip()
+        if not path:
+            return {"success": False, "error": "请填写类目路径"}
+        add_category_preset(path)
+        return {"success": True, "path": path}
+    except Exception as e:
+        print(f"添加类目预设错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/admin/categories/remove_preset")
+async def admin_remove_category_preset(request: Request, payload: dict = Depends(verify_admin_token)):
+    """移除类目预设（仅从预设列表移除，不影响已有记录）"""
+    try:
+        data = await request.json()
+        path = (data.get("path") or "").strip()
+        remove_category_preset(path)
+        return {"success": True}
+    except Exception as e:
         return {"success": False, "error": str(e)}
 
 
