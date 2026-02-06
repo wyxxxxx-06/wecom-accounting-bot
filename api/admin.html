@@ -1184,9 +1184,30 @@
                         <h5 style="margin: 0 0 10px 0; color: #c62828;">待处理：以下类目已从表中删除，请为每组选择要归入的分类</h5>
                         <div id="categoryPendingList"></div>
                     </div>
+                    <!-- 4 手动合并：选多个→合并为一个，不依赖表格 -->
+                    <div style="margin-bottom: 16px; padding: 14px; background: #f0f4ff; border-radius: 8px; border: 1px solid #d0d9f7;">
+                        <h5 style="margin: 0 0 8px 0; color: #333;">手动合并</h5>
+                        <p style="margin: 0 0 10px 0; color: #666; font-size: 13px;">选择要合并的分类 → 合并为（填目标名）→ 合并。记录和映射都会更新。</p>
+                        <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px;">
+                            <div><label style="font-size: 12px; color: #555;">选择要合并的</label><select id="mergeFromSelect" multiple class="category-select" style="min-width: 180px; min-height: 72px;"></select></div>
+                            <div><label style="font-size: 12px; color: #555;">合并为</label><input type="text" id="mergeToInput" placeholder="如：正餐" style="width: 120px; padding: 8px 12px; border-radius: 8px; border: 2px solid #e0e0e0;"></div>
+                            <button class="btn" onclick="doMergeSimple()">合并</button>
+                            <span id="mergeSimpleResult" style="font-size: 13px; color: #28a745;"></span>
+                        </div>
+                    </div>
+                    <!-- 5 新增类目：网页直接加，不用每次下载上传 -->
+                    <div style="margin-bottom: 16px; padding: 14px; background: #fff8e6; border-radius: 8px; border: 1px solid #f0e0a0;">
+                        <h5 style="margin: 0 0 8px 0; color: #333;">新增类目</h5>
+                        <p style="margin: 0 0 10px 0; color: #666; font-size: 13px;">直接填写类目，可多级用 | 分隔，如 正餐、正餐|早餐、正餐|晚餐|外卖。</p>
+                        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px;">
+                            <input type="text" id="newCategoryPathInput" placeholder="正餐|晚餐|外卖" style="width: 220px; padding: 8px 12px; border-radius: 8px; border: 2px solid #e0e0e0;">
+                            <button class="btn" onclick="addCategoryPreset()">添加类目</button>
+                            <span id="addCategoryPresetResult" style="font-size: 13px;"></span>
+                        </div>
+                    </div>
                     <div class="table-header" style="flex-wrap: wrap; gap: 15px;">
                         <h3 style="margin: 0; color: #333; font-size: 18px;">分类列表（按层级展开/收起）</h3>
-                        <button class="btn" onclick="showAddCategoryModal()" style="width: auto; padding: 10px 24px;" id="addCategoryBtn">新增分类</button>
+                        <button class="btn" onclick="showAddCategoryModal()" style="width: auto; padding: 10px 24px;" id="addCategoryBtn">说明</button>
                         <button class="btn" onclick="downloadCategoryExcel()" style="width: auto; padding: 10px 24px; background: #28a745;">下载分类表</button>
                         <span style="display: inline-flex; align-items: center; gap: 8px;">
                             <input type="file" id="categoryFileInput" accept=".xlsx" style="display:none" onchange="uploadCategoryExcel(event)">
@@ -1378,6 +1399,7 @@
                 <label style="font-size: 12px; color: #666;">三级（选填）</label>
                 <select id="editCategoryL3" class="category-select" style="width: 100%;"><option value="">— 不选 —</option></select>
             </div>
+            <div style="margin-top: 6px;"><a href="javascript:void(0)" onclick="addNewCategoryFromEditModal()" style="font-size: 12px; color: #667eea;">+ 新建分类</a></div>
             <div class="btn-group">
                 <button class="btn" onclick="saveRecord()">保存</button>
                 <button class="btn btn-secondary" onclick="closeEditModal()">取消</button>
@@ -2093,6 +2115,42 @@
             document.getElementById('editModal').classList.remove('active');
         }
 
+        async function addNewCategoryFromEditModal() {
+            var path = prompt('输入新类目，多级用 | 分隔（如：正餐|晚餐）');
+            if (!path || !(path = path.trim())) return;
+            try {
+                var r = await fetchWithAuth('/api/admin/categories/add_preset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: path }) });
+                var d = await r.json();
+                if (!d.success) { alert('❌ ' + (d.error || '添加失败')); return; }
+                var catR = await fetchWithAuth('/api/admin/categories');
+                var catD = await catR.json();
+                if (!catD.success) return;
+                var tree = catD.tree || {};
+                var paths = catD.paths || [];
+                var pathStats = {};
+                (catD.category_stats || []).forEach(function(c) { var p = typeof c === 'string' ? c : c.category; pathStats[p] = { count: c.count || 0, amount: c.amount || 0 }; });
+                window.categoryTreeData = { tree: tree, paths: paths, pathStats: pathStats };
+                var cascadeWrap = document.getElementById('editCategoryCascadeWrap');
+                if (cascadeWrap && cascadeWrap.style.display !== 'none') {
+                    var L1 = document.getElementById('editCategoryL1'), L2 = document.getElementById('editCategoryL2'), L3 = document.getElementById('editCategoryL3');
+                    var l1Keys = Object.keys(tree).sort();
+                    L1.innerHTML = '<option value="">请选一级</option>' + l1Keys.map(function(k) { return '<option value="' + (k||'').replace(/"/g, '&quot;') + '">' + escapeHtml(k) + '</option>'; }).join('');
+                    var parts = path.split('|');
+                    L1.value = parts[0] || '';
+                    L1.dispatchEvent(new Event('change'));
+                    L2.value = parts[1] || '';
+                    L2.dispatchEvent(new Event('change'));
+                    L3.value = parts[2] || '';
+                } else {
+                    var editCatSel = document.getElementById('editCategory');
+                    var list = paths.length ? paths : (catD.categories || []).map(function(c) { return typeof c === 'string' ? c : c.category; });
+                    editCatSel.innerHTML = '<option value="">选择分类</option>' + list.map(function(n) { return '<option value="' + (n||'').replace(/"/g, '&quot;') + '">' + escapeHtml((n||'').indexOf('|') >= 0 ? pathDisplay(n) : n) + '</option>'; }).join('');
+                    editCatSel.value = path;
+                }
+                alert('✅ 已添加，当前已选为：' + path);
+            } catch (e) { alert('❌ ' + (e.message || '失败')); }
+        }
+
         async function saveRecord() {
             const id = document.getElementById('editId').value;
             var categoryVal = '';
@@ -2552,11 +2610,13 @@
                             var sumCount = 0, sumAmount = 0;
                             childPaths.forEach(function(p) { var s = pathStats[p]; if (s) { sumCount += s.count; sumAmount += s.amount; } });
                             var l1Esc = (l1||'').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                            html += '<tr class="cat-l1"><td><span class="cat-toggle" data-l1="' + l1Esc + '" onclick="toggleCatRow(\'' + l1Esc + '\')"></span>' + escapeHtml(l1) + '</td><td>' + sumCount + '</td><td style="font-weight: 600; color: #e74c3c;">¥' + sumAmount.toFixed(2) + '</td><td></td></tr>';
+                            var l1Attr = (l1||'').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+                            html += '<tr class="cat-l1"><td><span class="cat-toggle" data-l1="' + l1Esc + '" onclick="toggleCatRow(\'' + l1Esc + '\')"></span>' + escapeHtml(l1) + '</td><td>' + sumCount + '</td><td style="font-weight: 600; color: #e74c3c;">¥' + sumAmount.toFixed(2) + '</td><td><button type="button" class="btn" style="width: auto; padding: 6px 10px; font-size: 12px;" data-parent="' + l1Attr + '" onclick="addSubCategory(this)">+ 添加子类</button></td></tr>';
                             childPaths.sort().forEach(function(p) {
                                 var s = pathStats[p] || {};
                                 var pEsc = (p||'').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                                html += '<tr class="cat-child" data-l1="' + l1Esc + '"><td style="padding-left: 28px;">' + escapeHtml(pathDisplay(p)) + '</td><td>' + (s.count||0) + '</td><td style="font-weight: 600; color: #e74c3c;">¥' + (s.amount||0).toFixed(2) + '</td><td><button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px;" onclick="renameCategory(\'' + pEsc + '\')">重命名</button> <button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px; background: #dc3545;" onclick="deleteCategory(\'' + pEsc + '\', ' + (s.count||0) + ')">删除</button></td></tr>';
+                                var pAttr = (p||'').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+                                html += '<tr class="cat-child" data-l1="' + l1Esc + '"><td style="padding-left: 28px;">' + escapeHtml(pathDisplay(p)) + '</td><td>' + (s.count||0) + '</td><td style="font-weight: 600; color: #e74c3c;">¥' + (s.amount||0).toFixed(2) + '</td><td><button type="button" class="btn" style="width: auto; padding: 6px 10px; font-size: 12px;" data-parent="' + pAttr + '" onclick="addSubCategory(this)">+ 添加子类</button> <button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px;" onclick="renameCategory(\'' + pEsc + '\')">编辑</button> <button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px; background: #dc3545;" onclick="deleteCategory(\'' + pEsc + '\', ' + (s.count||0) + ')">删除</button></td></tr>';
                             });
                         });
                         tbody.innerHTML = html;
@@ -2564,11 +2624,40 @@
                         tbody.innerHTML = cats.map(c => {
                             const cat = typeof c === 'string' ? c : c.category;
                             var catEsc = (cat||'').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                            return '<tr><td style="font-weight: 600; color: #667eea;">' + escapeHtml(cat) + '</td><td>' + (c.count||0) + '</td><td style="font-weight: 600; color: #e74c3c;">¥' + (c.amount||0).toFixed(2) + '</td><td><button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px;" onclick="renameCategory(\'' + catEsc + '\')">重命名</button> <button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px; background: #dc3545;" onclick="deleteCategory(\'' + catEsc + '\', ' + (c.count||0) + ')">删除</button></td></tr>';
+                            return '<tr><td style="font-weight: 600; color: #667eea;">' + escapeHtml(cat) + '</td><td>' + (c.count||0) + '</td><td style="font-weight: 600; color: #e74c3c;">¥' + (c.amount||0).toFixed(2) + '</td><td><button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px;" onclick="renameCategory(\'' + catEsc + '\')">编辑</button> <button class="btn" style="width: auto; padding: 6px 14px; font-size: 12px; background: #dc3545;" onclick="deleteCategory(\'' + catEsc + '\', ' + (c.count||0) + ')">删除</button></td></tr>';
                         }).join('');
                     }
+                    var list = paths.length ? paths : cats.map(function(c) { return typeof c === 'string' ? c : c.category; });
+                    var mergeSel = document.getElementById('mergeFromSelect');
+                    if (mergeSel) mergeSel.innerHTML = list.map(function(p) { return '<option value="' + (p||'').replace(/"/g, '&quot;') + '">' + escapeHtml(pathDisplay(p)) + '</option>'; }).join('');
                 }
             } catch (e) { console.error('加载分类失败:', e); }
+        }
+        async function addSubCategory(btn) {
+            var parent = (btn && btn.getAttribute('data-parent')) || '';
+            var name = prompt('子类名称：');
+            if (!name || !(name = name.trim())) return;
+            var newPath = parent ? parent + '|' + name : name;
+            try {
+                var r = await fetchWithAuth('/api/admin/categories/add_preset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: newPath }) });
+                var d = await r.json();
+                if (d.success) { loadCategories(); }
+                else alert('❌ ' + (d.error || '添加失败'));
+            } catch (e) { alert('❌ ' + (e.message || '失败')); }
+        }
+
+        async function addCategoryPreset() {
+            var input = document.getElementById('newCategoryPathInput');
+            var resultEl = document.getElementById('addCategoryPresetResult');
+            var path = (input && input.value || '').trim();
+            if (!path) { resultEl.textContent = ''; alert('请填写类目'); return; }
+            resultEl.textContent = '添加中...';
+            try {
+                var r = await fetchWithAuth('/api/admin/categories/add_preset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: path }) });
+                var d = await r.json();
+                if (d.success) { resultEl.textContent = '✅ 已添加'; input.value = ''; loadCategories(); }
+                else resultEl.textContent = '❌ ' + (d.error || '失败');
+            } catch (e) { resultEl.textContent = '❌ ' + (e.message || '失败'); }
         }
 
         async function downloadCategoryMapping() {
@@ -3043,10 +3132,12 @@
         // 加载分类统计
         let showAllCategories = false;
         let currentCategoryType = ''; // year, month, date
+        let currentCategoryArgs = []; // 用于返回时重新加载（如 date 的日期）
         
         async function loadCategoryStats(type, ...args) {
             const maxRetries = 2;
             currentCategoryType = type;
+            currentCategoryArgs = args;
             
             const doLoad = async (retryCount = 0) => {
                 try {
@@ -3107,7 +3198,7 @@
             } else if (type === 'date') {
                 categories = data.categories || [];
                 title = (data.date || '') + ' 分类支出统计';
-                clickable = false;
+                clickable = true;
             }
             
             const totalCount = type === 'year' ? listYear : (type === 'date' ? categories.length : listMonth);
@@ -3149,14 +3240,15 @@
             loadCategoryStats(type, ...args);
         }
 
-        // 查看分类明细
+        // 查看分类明细（支持年/月/日，点击分类可查看该分类支出）
         function viewCategoryDetails(category, type, ...args) {
             let url = `/api/admin/category_records?category=${encodeURIComponent(category)}`;
-            
             if (type === 'year') {
                 url += `&year=${args[0]}`;
             } else if (type === 'month') {
                 url += `&year=${args[0]}&month=${args[1]}`;
+            } else if (type === 'date') {
+                url += `&date=${args[0] || ''}`;
             }
             
             fetchWithAuth(url)
@@ -3175,6 +3267,8 @@
                         const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月',
                             '七月', '八月', '九月', '十月', '十一月', '十二月'];
                         periodText = args[0] + '年' + monthNames[args[1] - 1];
+                    } else if (type === 'date') {
+                        periodText = args[0] || '';
                     }
                     safeText(document.getElementById('tableStatsTitle'), periodText + ' - ' + category);
                     safeDisplay(document.getElementById('backBtn'), 'block');
@@ -3221,6 +3315,8 @@
                     loadDailyStats(currentYear, currentMonth);
                 } else if (currentCategoryType === 'year') {
                     loadMonthlyStats();
+                } else if (currentCategoryType === 'date') {
+                    loadCategoryStats('date', currentCategoryArgs[0]);
                 }
             } else if (currentView === 'details') {
                 // 从明细返回到日期列表
