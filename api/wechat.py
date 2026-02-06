@@ -1832,33 +1832,48 @@ def parse_category_excel(file_bytes: bytes) -> dict:
 
 
 def build_category_mapping_excel_bytes() -> bytes:
-    """导出「分类映射表」模板：原分类、新分类。新分类预填为原分类，用户可改为正餐/出行等以合并；删掉某行则该类目上传后为待处理。"""
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "分类映射"
-    header_font = Font(bold=True, color="FFFFFF")
-    header_fill = PatternFill("solid", fgColor="4F81BD")
-    ws.append(["使用说明"])
-    ws.append(["1. 本表为当前所有类目。修改「新分类」列即可合并：如把 早餐、晚餐 的新分类都改为 正餐"])
-    ws.append(["2. 也可用单列写「新分类----原分类」，如 正餐----早餐、出行----打车（一行一个）"])
-    ws.append(["3. 若删除某一行，上传后该分类的记录会进入「待处理」，需在网页上为每组选择要归入的分类"])
-    ws.append(["4. 不要删表头"])
-    ws.append([])
-    ws.append(["原分类", "新分类"])
-    for c in ws[ws.max_row]:
-        c.font = header_font
-        c.fill = header_fill
-    stats = get_category_stats()
-    for item in stats:
-        ws.append([item["category"], item["category"]])
-    bio = io.BytesIO()
-    wb.save(bio)
-    bio.seek(0)
-    return bio.read()
+    """导出「分类映射表」模板：原分类、新分类。支持一级/二级/三级，新分类用----分隔如 正餐----晚餐----外卖。"""
+    try:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "分类映射"
+        ws.append(["使用说明"])
+        ws.append(["1. 本表为当前所有类目。修改「新分类」列即可合并，可写一级(正餐)或二级(正餐----早餐)或三级(正餐----晚餐----外卖)"])
+        ws.append(["2. 也可单列写「新分类----原分类」，如 正餐----早餐、出行----打车；新分类里再用----表示多级"])
+        ws.append(["3. 若删除某一行，上传后该分类的记录会进入「待处理」，需在网页上为每组选择要归入的分类"])
+        ws.append(["4. 不要删表头"])
+        ws.append([])
+        ws.append(["原分类", "新分类"])
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill("solid", fgColor="4F81BD")
+        for col in range(1, 3):
+            c = ws.cell(row=ws.max_row, column=col)
+            c.font = header_font
+            c.fill = header_fill
+        stats = get_category_stats()
+        for item in stats:
+            cat = item.get("category") or ""
+            cat_str = str(cat).strip() if cat is not None else ""
+            if cat_str:
+                ws.append([cat_str, cat_str])
+        bio = io.BytesIO()
+        wb.save(bio)
+        bio.seek(0)
+        return bio.read()
+    except Exception as e:
+        print(f"导出映射表 build 错误: {str(e)[:200]}")
+        raise
+
+
+def _normalize_new_category(s: str) -> str:
+    """新分类里用----表示多级，存库用|。如 正餐----晚餐----外卖 -> 正餐|晚餐|外卖"""
+    if not s or not isinstance(s, str):
+        return (s or "").strip()
+    return s.strip().replace("----", "|")
 
 
 def parse_category_mapping_excel(file_bytes: bytes) -> dict:
-    """解析分类映射表 Excel。支持两列「原分类、新分类」或单列「新分类----原分类」。返回 mappings 和文件里出现的原分类集合。"""
+    """解析分类映射表 Excel。支持两列「原分类、新分类」或单列「新分类----原分类」。新分类可多级如 正餐----晚餐----外卖。"""
     try:
         wb = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
         sheet_name = "分类映射" if "分类映射" in wb.sheetnames else (wb.sheetnames[0] if wb.sheetnames else "")
@@ -1876,15 +1891,22 @@ def parse_category_mapping_excel(file_bytes: bytes) -> dict:
             if not cell0 or cell0 in ("原分类", "新分类", "新分类----原分类"):
                 continue
             if "----" in cell0:
-                parts = cell0.split("----", 1)
-                new_cat, orig = (parts[0] or "").strip(), (parts[1] or "").strip()
+                parts = cell0.rsplit("----", 1)
+                new_cat_raw = (parts[0] or "").strip()
+                orig = (parts[1] or "").strip()
                 if not orig:
-                    orig = new_cat
+                    orig = new_cat_raw
+                if not new_cat_raw:
+                    new_cat_raw = orig
+                new_cat = _normalize_new_category(new_cat_raw)
                 if not new_cat:
                     new_cat = orig
             else:
                 orig = cell0
-                new_cat = str(row[1] or "").strip() if len(row) >= 2 else orig
+                new_cat_raw = str(row[1] or "").strip() if len(row) >= 2 else orig
+                if not new_cat_raw:
+                    new_cat_raw = orig
+                new_cat = _normalize_new_category(new_cat_raw)
                 if not new_cat:
                     new_cat = orig
             in_header.add(orig)
@@ -3566,15 +3588,13 @@ async def admin_export_category_mapping(payload: dict = Depends(verify_admin_tok
     """下载分类映射表模板（含当前所有类目），编辑后上传用于合并；删掉的行上传后为待处理"""
     try:
         data = build_category_mapping_excel_bytes()
-        from urllib.parse import quote
-        filename = "分类映射表.xlsx"
         headers = {
-            "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}',
+            "Content-Disposition": 'attachment; filename="category_mapping.xlsx"',
             "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         }
         return Response(content=data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
     except Exception as e:
-        print(f"导出映射表错误: {str(e)[:100]}")
+        print(f"导出映射表错误: {str(e)[:200]}")
         return Response(content="error", status_code=500)
 
 
