@@ -1158,31 +1158,21 @@
             <!-- 分类管理 -->
             <div class="section" id="categories">
                 <div class="table-container">
-                    <!-- 合并分类：把分散的归成一个 -->
-                    <div style="margin-bottom: 20px; padding: 16px; background: #f0f4ff; border-radius: 10px; border: 1px solid #d0d9f7;">
-                        <h4 style="margin: 0 0 8px 0; color: #333; font-size: 15px;">合并分类</h4>
-                        <p style="margin: 0 0 12px 0; color: #666; font-size: 13px;">把多个分散的分类合并成一个，历史记录和关键词映射都会一起更新，不会丢数据。</p>
-                        <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px;">
-                            <div>
-                                <label style="display: block; margin-bottom: 4px; font-size: 13px; color: #555;">选择要合并的分类（可多选）</label>
-                                <select id="mergeFromSelect" multiple class="category-select" style="min-width: 200px; min-height: 80px; padding: 8px;"></select>
-                            </div>
-                            <div>
-                                <label style="display: block; margin-bottom: 4px; font-size: 13px; color: #555;">合并为</label>
-                                <input type="text" id="mergeToInput" placeholder="如：正餐" style="padding: 8px 12px; border: 2px solid #e0e0e0; border-radius: 8px; width: 140px;">
-                            </div>
-                            <button class="btn" onclick="doMergeSimple()" style="padding: 10px 20px;">合并</button>
-                        </div>
-                        <p id="mergeSimpleResult" style="margin: 10px 0 0 0; font-size: 13px; color: #28a745;"></p>
-                    </div>
-                    <div style="margin-bottom: 16px; padding: 12px; background: #fff8e6; border-radius: 8px; border: 1px solid #f0e0a0;">
-                        <strong>表格编辑合并</strong>：下载映射表（含当前所有类目）→ 在表格里把「新分类」改成要合并成的名字（如 正餐、出行）→ 上传。若删掉了某行，上传后该分类会进入下方「待处理」，需为每组选一个新分类。
-                        <span style="margin-left: 12px;">
-                            <button class="btn" onclick="downloadCategoryMapping()" style="width: auto; padding: 8px 16px;">下载分类映射表</button>
+                    <!-- 按你说的：表格下载 → 编辑 → 上传，删掉的类目进待处理 -->
+                    <div style="margin-bottom: 20px; padding: 18px; background: #e8f5e9; border-radius: 10px; border: 1px solid #a5d6a7;">
+                        <h4 style="margin: 0 0 12px 0; color: #2e7d32; font-size: 16px;">用表格改分类（下载 → 编辑 → 上传）</h4>
+                        <ol style="margin: 0 0 14px 0; padding-left: 20px; color: #333; font-size: 14px; line-height: 1.8;">
+                            <li><strong>下载</strong>：点下面「下载分类映射表」，得到当前所有类目的表格（含原分类、新分类）。</li>
+                            <li><strong>编辑</strong>：在表格里改「新分类」列，把要归成一类的改成同一个名字。例如 早餐、晚餐 的新分类都改成 <strong>正餐</strong>，打车、加油 都改成 <strong>出行</strong>。也可用一列写「新分类----原分类」，如：正餐----早餐、正餐----晚餐、出行----打车、出行----加油。</li>
+                            <li><strong>上传</strong>：保存表格后点「上传映射表」，选你改好的文件。系统会按表合并，记录和映射都会更新。</li>
+                            <li>若你在表里<strong>删掉了某一行</strong>（例如删掉 早餐、晚餐），上传后会提示：这些类目的记录需要重新归到哪个分类。下面会出现「待处理」，为每组选一个要归入的分类点确定即可。</li>
+                        </ol>
+                        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                            <button class="btn" onclick="downloadCategoryMapping()" style="padding: 10px 20px;">下载分类映射表</button>
                             <input type="file" id="categoryMappingFileInput" accept=".xlsx" style="display:none" onchange="uploadCategoryMapping(event)">
-                            <button class="btn" onclick="document.getElementById('categoryMappingFileInput').click()" style="width: auto; padding: 8px 16px; background: #28a745;">上传映射表</button>
-                        </span>
-                        <span id="categoryMappingUploadResult" style="margin-left: 8px; font-size: 13px;"></span>
+                            <button class="btn" onclick="document.getElementById('categoryMappingFileInput').click()" style="padding: 10px 20px; background: #2e7d32;">上传映射表</button>
+                            <span id="categoryMappingUploadResult" style="font-size: 13px; color: #1b5e20;"></span>
+                        </div>
                     </div>
                     <div id="categoryPendingWrap" style="display: none; margin-bottom: 16px; padding: 14px; background: #ffebee; border-radius: 8px; border: 1px solid #ef9a9a;">
                         <h5 style="margin: 0 0 10px 0; color: #c62828;">待处理：以下类目已从表中删除，请为每组选择要归入的分类</h5>
