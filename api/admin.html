@@ -1096,12 +1096,11 @@
                                 <option value="year">按年</option>
                                 <option value="month">按月</option>
                                 <option value="week">按周</option>
-                                <option value="day">按日</option>
                             </select>
                             <input type="number" id="statsYear" placeholder="年份" min="2020" max="2099" style="width: 100px; padding: 8px 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px; display: none;">
                             <input type="number" id="statsMonth" placeholder="月份" min="1" max="12" style="width: 100px; padding: 8px 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px; display: none;">
                             <input type="date" id="statsDate" style="width: 150px; padding: 8px 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px; display: none;">
-                            <button class="btn" onclick="loadStats()" style="width: auto; padding: 8px 16px; font-size: 14px;">刷新</button>
+                            <button class="btn" id="statsRefreshBtn" type="button" onclick="loadStats()" style="width: auto; padding: 8px 16px; font-size: 14px;">刷新</button>
                         </div>
                     </div>
                 </div>
@@ -2236,8 +2235,7 @@
                 + '<p style="color:#555;line-height:1.6;">是否将所有「' + escapeHtml(description) + '」的记录都改为「<b>' + escapeHtml(displayNew) + '</b>」？</p>'
                 + '<div style="display:flex;gap:10px;margin-top:18px;">'
                 + '<button id="mcBtnAll" class="btn" style="flex:1;padding:12px;">全部修改</button>'
-                + '<button id="mcBtnAlias" class="btn" style="flex:1;padding:12px;background:#e8a435;">仅改映射</button>'
-                + '<button id="mcBtnSkip" class="btn btn-secondary" style="flex:1;padding:12px;">不修改</button>'
+                + '<button id="mcBtnSkip" class="btn btn-secondary" style="flex:1;padding:12px;">全部不修改</button>'
                 + '</div>';
             overlay.appendChild(box);
             document.body.appendChild(overlay);
@@ -2256,19 +2254,7 @@
                 document.body.removeChild(overlay);
             };
             
-            // 仅改映射：只更新别名，不改历史记录
-            document.getElementById('mcBtnAlias').onclick = async function() {
-                try {
-                    await fetchWithAuth('/api/admin/records/update_alias_only', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ description: description, category: newCategory })
-                    });
-                } catch (e) { /* 静默 */ }
-                document.body.removeChild(overlay);
-            };
-            
-            // 不修改：关闭弹窗
+            // 全部不修改：不改任何记录和映射，关闭弹窗
             document.getElementById('mcBtnSkip').onclick = function() {
                 document.body.removeChild(overlay);
             };
@@ -2293,13 +2279,30 @@
             }
         }
 
-        // 加载统计
+        // 加载统计（防重复点击 + 加载态）
+        var statsLoading = false;
         async function loadStats(retryCount = 0) {
             const maxRetries = 2;
             const token = sessionStorage.getItem('admin_token');
             if (!token) {
                 alert('请先登录');
                 return;
+            }
+            if (statsLoading && retryCount === 0) return;
+            if (retryCount === 0) {
+                statsLoading = true;
+                var btn = document.getElementById('statsRefreshBtn');
+                if (btn) { btn.disabled = true; btn.textContent = '加载中...'; }
+            }
+            
+            function doneLoading(success) {
+                statsLoading = false;
+                var b = document.getElementById('statsRefreshBtn');
+                if (b) {
+                    b.disabled = false;
+                    b.textContent = success !== false ? '刷新' : '加载失败，点击重试';
+                    if (success === false) setTimeout(function() { if (b) b.textContent = '刷新'; }, 2500);
+                }
             }
             
             // 显示/隐藏筛选控件
@@ -2308,9 +2311,9 @@
             document.getElementById('statsMonth').style.display = period === 'month' ? 'block' : 'none';
             document.getElementById('statsDate').style.display = period === 'day' ? 'block' : 'none';
             
-            // 设置默认值
+            // 设置默认值（按日时务必先填日期再请求）
+            var now = new Date();
             if (period === 'year' || period === 'month') {
-                const now = new Date();
                 if (!document.getElementById('statsYear').value) {
                     document.getElementById('statsYear').value = now.getFullYear();
                 }
@@ -2318,19 +2321,19 @@
                     document.getElementById('statsMonth').value = now.getMonth() + 1;
                 }
             }
-            if (period === 'day' && !document.getElementById('statsDate').value) {
-                const today = new Date();
-                document.getElementById('statsDate').value = today.toISOString().split('T')[0];
+            if (period === 'day') {
+                var dateEl = document.getElementById('statsDate');
+                if (!dateEl.value) dateEl.value = now.toISOString().split('T')[0];
             }
             
             try {
                 let url = '/api/admin/stats?';
                 if (period === 'year' && document.getElementById('statsYear').value) {
-                    url += `year=${document.getElementById('statsYear').value}`;
+                    url += 'year=' + encodeURIComponent(document.getElementById('statsYear').value);
                 } else if (period === 'month' && document.getElementById('statsYear').value && document.getElementById('statsMonth').value) {
-                    url += `year=${document.getElementById('statsYear').value}&month=${document.getElementById('statsMonth').value}`;
+                    url += 'year=' + encodeURIComponent(document.getElementById('statsYear').value) + '&month=' + encodeURIComponent(document.getElementById('statsMonth').value);
                 } else if (period === 'day' && document.getElementById('statsDate').value) {
-                    url += `date=${document.getElementById('statsDate').value}`;
+                    url += 'date=' + encodeURIComponent(document.getElementById('statsDate').value);
                 } else if (period === 'week') {
                     url += 'week=1';
                 }
@@ -2539,19 +2542,18 @@
                                 easing: 'easeInOutQuart'
                             }
                         },
-                        plugins: [ChartDataLabels]
+                                plugins: [ChartDataLabels]
                     });
+                    doneLoading(true);
                 } else {
                     throw new Error(data.error || '加载失败');
                 }
             } catch (e) {
                 console.error('加载统计失败:', e);
                 if (retryCount < maxRetries) {
-                    // 静默重试
-                    setTimeout(() => loadStats(retryCount + 1), 1000 * (retryCount + 1));
+                    setTimeout(function() { loadStats(retryCount + 1); }, 800 * (retryCount + 1));
                 } else {
-                    // 显示错误提示（但不阻止用户操作）
-                    console.warn('统计加载失败，请刷新页面重试');
+                    doneLoading(false);
                 }
             }
         }
