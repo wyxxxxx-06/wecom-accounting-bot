@@ -1091,6 +1091,7 @@
                         <h3 style="margin: 0;">统计时间范围</h3>
                         <div style="display: flex; gap: 10px; align-items: center;">
                             <select id="statsPeriod" onchange="loadStats()" style="padding: 8px 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px;">
+                                <option value="day">按日</option>
                                 <option value="all">全部数据</option>
                                 <option value="year">按年</option>
                                 <option value="month">按月</option>
@@ -2049,7 +2050,11 @@
         }
 
         // 编辑记录（打开时填充分类下拉）
+        var _editOriginalCategory = '';
+        var _editOriginalDescription = '';
         async function editRecord(id, date, time, description, amount, category) {
+            _editOriginalCategory = category || '';
+            _editOriginalDescription = description || '';
             document.getElementById('editId').value = id;
             document.getElementById('editDate').value = date;
             document.getElementById('editTime').value = time;
@@ -2164,10 +2169,11 @@
             } else {
                 categoryVal = document.getElementById('editCategory').value;
             }
+            var descriptionVal = document.getElementById('editDescription').value;
             const data = {
                 date: document.getElementById('editDate').value,
                 time: document.getElementById('editTime').value,
-                description: document.getElementById('editDescription').value,
+                description: descriptionVal,
                 amount: parseFloat(document.getElementById('editAmount').value),
                 category: categoryVal
             };
@@ -2187,12 +2193,85 @@
                     loadRecords(currentPage);
                     loadOverview();
                     if (categoryChart) loadStats();
+                    
+                    // ===== 智能映射：分类变更时自动处理别名 =====
+                    var categoryChanged = (categoryVal !== _editOriginalCategory);
+                    if (categoryChanged && descriptionVal && categoryVal) {
+                        var sameCount = result.same_desc_count || 1;
+                        if (sameCount <= 1) {
+                            // 只有一条记录：直接更新映射
+                            try {
+                                await fetchWithAuth('/api/admin/records/update_alias_only', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ description: descriptionVal, category: categoryVal })
+                                });
+                            } catch (e) { /* 静默 */ }
+                        } else {
+                            // 多条记录：弹出确认框
+                            showMappingConflictDialog(descriptionVal, categoryVal, _editOriginalCategory, sameCount);
+                        }
+                    }
                 } else {
                     alert(result.error || '保存失败');
                 }
             } catch (e) {
                 alert('保存失败: ' + e.message);
             }
+        }
+        
+        // ===== 映射冲突确认弹窗 =====
+        function showMappingConflictDialog(description, newCategory, oldCategory, count) {
+            var displayNew = newCategory.indexOf('|') >= 0 ? newCategory.replace(/\|/g, ' > ') : newCategory;
+            var displayOld = oldCategory.indexOf('|') >= 0 ? oldCategory.replace(/\|/g, ' > ') : oldCategory;
+            
+            // 创建弹窗
+            var overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;left:0;right:0;top:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;';
+            var box = document.createElement('div');
+            box.style.cssText = 'background:#fff;border-radius:16px;padding:24px;max-width:420px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.2);';
+            box.innerHTML = '<h3 style="margin:0 0 12px;color:#333;">⚠️ 分类映射冲突</h3>'
+                + '<p style="color:#555;line-height:1.6;">备注「<b>' + escapeHtml(description) + '</b>」共有 <b>' + count + '</b> 条记录。</p>'
+                + '<p style="color:#555;line-height:1.6;">你刚把这条从「<b>' + escapeHtml(displayOld) + '</b>」改为「<b>' + escapeHtml(displayNew) + '</b>」。</p>'
+                + '<p style="color:#555;line-height:1.6;">是否将所有「' + escapeHtml(description) + '」的记录都改为「<b>' + escapeHtml(displayNew) + '</b>」？</p>'
+                + '<div style="display:flex;gap:10px;margin-top:18px;">'
+                + '<button id="mcBtnAll" class="btn" style="flex:1;padding:12px;">全部修改</button>'
+                + '<button id="mcBtnAlias" class="btn" style="flex:1;padding:12px;background:#e8a435;">仅改映射</button>'
+                + '<button id="mcBtnSkip" class="btn btn-secondary" style="flex:1;padding:12px;">不修改</button>'
+                + '</div>';
+            overlay.appendChild(box);
+            document.body.appendChild(overlay);
+            
+            // 全部修改：更新所有同备注记录的分类 + 更新映射
+            document.getElementById('mcBtnAll').onclick = async function() {
+                try {
+                    await fetchWithAuth('/api/admin/records/update_desc_category', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ description: description, category: newCategory })
+                    });
+                    loadRecords(currentPage);
+                    loadOverview();
+                } catch (e) { /* 静默 */ }
+                document.body.removeChild(overlay);
+            };
+            
+            // 仅改映射：只更新别名，不改历史记录
+            document.getElementById('mcBtnAlias').onclick = async function() {
+                try {
+                    await fetchWithAuth('/api/admin/records/update_alias_only', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ description: description, category: newCategory })
+                    });
+                } catch (e) { /* 静默 */ }
+                document.body.removeChild(overlay);
+            };
+            
+            // 不修改：关闭弹窗
+            document.getElementById('mcBtnSkip').onclick = function() {
+                document.body.removeChild(overlay);
+            };
         }
 
         async function deleteRecord(id) {
