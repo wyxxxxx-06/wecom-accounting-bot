@@ -79,17 +79,8 @@ MSG_DEDUP_CACHE = {}
 MSG_DEDUP_MAX_SIZE = 1000  # 最多保留1000条消息ID
 MSG_DEDUP_TTL = 300  # 消息ID保留5分钟
 
-# ============ 分类关键词映射 ============
-CATEGORY_KEYWORDS = {
-    "餐饮": ["早餐", "午餐", "晚餐", "早饭", "午饭", "晚饭", "吃饭", "外卖", "饭", "餐", "奶茶", "咖啡", "饮料", "零食", "水果", "菜", "肉", "面", "粉", "火锅", "烧烤", "小吃"],
-    "交通": ["打车", "滴滴", "出租车", "地铁", "公交", "公车", "油费", "加油", "停车", "高速", "过路费", "单车", "共享", "车费", "交通"],
-    "购物": ["淘宝", "京东", "拼多多", "购物", "买", "衣服", "鞋", "包", "超市", "商场"],
-    "娱乐": ["电影", "游戏", "ktv", "唱歌", "旅游", "门票", "娱乐", "玩"],
-    "居住": ["房租", "水费", "电费", "燃气", "物业", "网费", "宽带"],
-    "医疗": ["医院", "药", "看病", "体检", "医疗"],
-    "教育": ["书", "课程", "培训", "学习", "教育"],
-    "生活用品": ["洗发水", "洗发露", "沐浴露", "牙膏", "牙刷", "纸巾", "洗衣液", "清洁", "日用品", "生活用品"]
-}
+# ============ 分类（不再使用内置关键词，仅用用户配置的别名完全匹配）============
+# 原 CATEGORY_KEYWORDS 已移除，避免未设置的类目（如交通）自动归类；未出现过的备注一律由用户选择分类。
 
 # 关键词别名缓存（全局）
 CATEGORY_ALIAS_CACHE = {"value": {}, "expires_at": 0}
@@ -836,43 +827,36 @@ def add_category_alias(keyword: str, category: str) -> bool:
 
 
 def parse_category(text: str) -> str:
-    """从文本中识别分类"""
-    text_lower = text.lower()
-    aliases = get_category_aliases()
-    for keyword, category in aliases.items():
-        if keyword in text_lower:
-            return category
-    for category, keywords in CATEGORY_KEYWORDS.items():
-        for keyword in keywords:
-            if keyword in text_lower:
-                return category
-    return "其他"
+    """从文本识别分类：仅用用户配置的别名，完全匹配；未匹配返回空字符串（由调用方决定是否用「其他」或让用户选择）。"""
+    return match_alias_category(text)
 
 
 def match_alias_category(text: str) -> str:
-    """别名只做完全匹配才自动归类；否则不自动归，让用户选择。内置关键词仍可用包含匹配。"""
-    text_lower = text.lower().strip()
+    """仅当用户配置的别名与备注完全一致 **且目标分类仍然存在** 时才自动归类；
+    否则返回空，必须让用户选择分类。不再使用任何内置关键词（如交通、餐饮）。"""
+    text_lower = (text or "").strip().lower()
+    if not text_lower:
+        return ""
     aliases = get_category_aliases()
-    # 1. 完全匹配：仅当用户输入与某关键词完全一致时才自动归到该分类
-    if text_lower in aliases:
-        return aliases[text_lower]
-    # 2. 不再做「关键词在输入里」的包含匹配，避免乱分类
-    # 3. 内置关键词仍用包含匹配（可选：后续也可改为完全匹配）
-    for category, keywords in CATEGORY_KEYWORDS.items():
-        for keyword in keywords:
-            if keyword in text_lower:
-                return category
+    matched = aliases.get(text_lower, "")
+    if not matched:
+        return ""
+    # 验证目标分类仍然存在于用户的分类列表中（防止别名指向已删除/不存在的分类如「购物」「交通」）
+    all_cats = get_all_categories()
+    for cat in all_cats:
+        if cat == matched or cat.startswith(matched + "|") or matched.startswith(cat + "|"):
+            return matched
+    # 目标分类不存在，视为无效别名
     return ""
 
 
 def get_category_candidates() -> list:
-    """可选分类列表（从数据库获取实际分类）"""
+    """可选分类列表（仅来自数据库/预设，不再使用内置关键词）"""
     categories = get_all_categories()
     if not categories:
-        # 如果没有分类，返回默认分类
-        categories = list(CATEGORY_KEYWORDS.keys())
-    if "其他" not in categories:
-        categories.append("其他")
+        categories = ["其他"]
+    elif "其他" not in categories:
+        categories = list(categories) + ["其他"]
     return categories
 
 
@@ -1177,11 +1161,10 @@ def parse_message(content: str) -> dict:
             start_date, end_date, label = month_range
             return {"type": "query_month", "start_date": start_date, "end_date": end_date, "label": label}
     
-    # 分类查询
-    for category in CATEGORY_KEYWORDS.keys():
-        if content == category:
+    # 分类查询：仅识别用户已有分类名（记录+预设）
+    for category in get_all_categories():
+        if content.strip() == category:
             return {"type": "query_category", "category": category}
-    
     return parse_record_text(content)
 
 
@@ -1254,10 +1237,10 @@ def parse_month_token(token: str):
 
 
 def resolve_record_category(parsed: dict) -> str:
-    """根据描述/显式分类确定最终分类"""
+    """根据描述/显式分类确定最终分类；无匹配时返回「其他」供补记/修改用（可再在网页端改）。"""
     if parsed.get("explicit_category"):
         return parsed["category"]
-    return parse_category(parsed.get("description", ""))
+    return parse_category(parsed.get("description", "")) or "其他"
 
 
 def format_statistics(stats: dict, period_name: str, start_date: datetime, end_date: datetime) -> str:
@@ -2193,7 +2176,10 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 if parsed_line["type"] == "record":
                     try:
                         alias_category = match_alias_category(parsed_line["description"])
-                        category = alias_category if alias_category else parse_category(parsed_line["description"])
+                        if not alias_category:
+                            failed.append(line + "（未匹配分类，请单独发送「记一笔 备注 金额」以选择分类）")
+                            continue
+                        category = alias_category
                         add_record(
                             openid=openid,
                             nickname=nickname,
@@ -2233,6 +2219,7 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             else:
                 alias_category = match_alias_category(parsed["description"])
                 if not alias_category:
+                    # 未出现过的备注：一定让用户自己选择分类，不自动归到任何类
                     categories = get_category_candidates()
                     PENDING_CATEGORY_PICKS[openid] = {
                         "ts": time.time(),
@@ -2242,7 +2229,7 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                     }
                     return build_category_pick_prompt(parsed["description"], parsed["amount"], categories)
                 category = alias_category
-                # 自动学习：如果从历史记录匹配到分类，也记录下来
+                # 仅当用户选过并记住的别名才自动学习，此处已是匹配到的
                 add_category_alias(parsed["description"], category)
             add_record(
                 openid=openid,
@@ -2298,10 +2285,13 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 description=parsed["description"],
                 created_at=dt
             )
+            note = ""
+            if not parse_category(parsed.get("description", "")) and category == "其他":
+                note = "\n（该备注未匹配到分类，已归为「其他」，可在网页端修改）"
             return (
                 f"✅ 补记成功（{parsed['date_token']}）\n"
                 f"{parsed['description']}：{parsed['amount']:.2f} 元\n"
-                f"分类：{category}"
+                f"分类：{category}{note}"
             )
         except Exception as e:
             print(f"补记失败: {str(e)[:100]}")
@@ -2484,8 +2474,6 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             now = datetime.now(LOCAL_TZ)
             month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             target_category = parsed["category"]
-            if target_category not in CATEGORY_KEYWORDS:
-                target_category = parse_category(target_category)
             records = get_records(start_date=month_start, category=target_category)
             records = filter_records_by_local_range(records, month_start, datetime.now(LOCAL_TZ) + timedelta(days=1))
             total = sum(r["amount"] for r in records)
@@ -3235,11 +3223,55 @@ async def admin_update_record(
         result = supabase.table("records").update(update_data).eq("id", record_id).execute()
         invalidate_records_cache()
         if result.data:
-            return {"success": True}
+            # 查询同备注的记录数量，供前端判断是否需要批量修改映射
+            same_desc_count = 0
+            if description:
+                try:
+                    cnt = supabase.table("records").select("id", count="exact").eq("description", description).execute()
+                    same_desc_count = cnt.count if cnt.count is not None else len(cnt.data)
+                except Exception:
+                    same_desc_count = 1
+            return {"success": True, "same_desc_count": same_desc_count, "description": description, "category": category}
         else:
             return {"success": False, "error": "更新失败"}
     except Exception as e:
         print(f"更新记录错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/admin/records/update_desc_category")
+async def admin_update_desc_category(request: Request, payload: dict = Depends(verify_admin_token)):
+    """将某备注的所有记录的分类都改为新分类，并更新别名映射"""
+    try:
+        data = await request.json()
+        description = (data.get("description") or "").strip()
+        new_category = (data.get("category") or "").strip()
+        if not description or not new_category:
+            return {"success": False, "error": "缺少参数"}
+        supabase = get_supabase_client()
+        result = supabase.table("records").update({"category": new_category}).eq("description", description).execute()
+        updated = len(result.data) if result.data else 0
+        # 更新别名映射
+        add_category_alias(description, new_category)
+        invalidate_records_cache()
+        return {"success": True, "updated": updated}
+    except Exception as e:
+        print(f"批量修改备注分类错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/admin/records/update_alias_only")
+async def admin_update_alias_only(request: Request, payload: dict = Depends(verify_admin_token)):
+    """仅更新别名映射（不修改历史记录）"""
+    try:
+        data = await request.json()
+        description = (data.get("description") or "").strip()
+        new_category = (data.get("category") or "").strip()
+        if not description or not new_category:
+            return {"success": False, "error": "缺少参数"}
+        add_category_alias(description, new_category)
+        return {"success": True}
+    except Exception as e:
         return {"success": False, "error": str(e)}
 
 
