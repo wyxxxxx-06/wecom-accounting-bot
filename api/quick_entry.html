@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>快速补录 & 账单导入</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    padding: 20px;
+}
+.container {
+    max-width: 900px;
+    margin: 0 auto;
+    background: white;
+    border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    padding: 30px;
+}
+h1 { font-size: 24px; color: #333; margin-bottom: 8px; text-align: center; }
+.subtitle { color: #666; text-align: center; margin-bottom: 20px; font-size: 14px; }
+.tabs {
+    display: flex;
+    border-bottom: 2px solid #eee;
+    margin-bottom: 20px;
+}
+.tab {
+    padding: 10px 20px;
+    cursor: pointer;
+    font-size: 15px;
+    color: #666;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    transition: all 0.2s;
+}
+.tab.active { color: #667eea; border-bottom-color: #667eea; font-weight: 600; }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+.toolbar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 15px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-weight: 500;
+}
+.btn-primary { background: linear-gradient(135deg, #667eea, #764ba2); color: white; }
+.btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(102,126,234,0.4); }
+.btn-secondary { background: #f0f0f0; color: #333; }
+.btn-secondary:hover { background: #e0e0e0; }
+.btn-danger { background: #ff4757; color: white; }
+.btn-danger:hover { background: #e0313f; }
+.btn-success { background: #2ed573; color: white; }
+.btn-success:hover { background: #26b85f; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+th {
+    background: #f8f9fa;
+    padding: 10px 8px;
+    text-align: left;
+    font-weight: 600;
+    color: #555;
+    border-bottom: 2px solid #eee;
+}
+td {
+    padding: 6px 4px;
+    border-bottom: 1px solid #f0f0f0;
+}
+td input, td select {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+td input:focus, td select:focus { border-color: #667eea; }
+td input[type="number"] { width: 80px; }
+td input[type="date"] { width: 130px; }
+td input[type="time"] { width: 90px; }
+.row-actions { display: flex; gap: 4px; }
+.row-actions button {
+    padding: 4px 8px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    background: #ff4757;
+    color: white;
+}
+.result {
+    margin-top: 15px;
+    padding: 12px;
+    border-radius: 8px;
+    display: none;
+    font-size: 14px;
+}
+.result.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; display: block; }
+.result.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; display: block; }
+.upload-area {
+    border: 2px dashed #667eea;
+    border-radius: 12px;
+    padding: 30px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s;
+    margin-bottom: 15px;
+}
+.upload-area:hover { border-color: #764ba2; background: #f8f9ff; }
+.upload-icon { font-size: 36px; margin-bottom: 8px; }
+input[type="file"] { display: none; }
+.csv-preview { max-height: 400px; overflow-y: auto; margin-top: 15px; }
+.csv-preview table { font-size: 13px; }
+.csv-preview td input { font-size: 12px; padding: 4px 6px; }
+.checkbox-col { width: 30px; text-align: center; }
+.login-box {
+    max-width: 350px;
+    margin: 80px auto;
+    background: white;
+    border-radius: 16px;
+    padding: 40px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    text-align: center;
+}
+.login-box h2 { margin-bottom: 20px; color: #333; }
+.login-box input {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    font-size: 15px;
+    margin-bottom: 15px;
+    outline: none;
+}
+.login-box input:focus { border-color: #667eea; }
+.login-box .btn { width: 100%; padding: 12px; font-size: 16px; }
+#app { display: none; }
+.select-all-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    font-size: 13px;
+    color: #666;
+}
+</style>
+</head>
+<body>
+
+<div class="login-box" id="loginBox">
+    <h2>管理员登录</h2>
+    <input type="password" id="loginPassword" placeholder="请输入管理密码" onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="btn btn-primary" onclick="doLogin()">登录</button>
+    <div class="result" id="loginResult"></div>
+</div>
+
+<div id="app" class="container">
+    <h1>快速补录 & 账单导入</h1>
+    <p class="subtitle">批量录入记账记录或导入微信/支付宝账单</p>
+
+    <div class="tabs">
+        <div class="tab active" onclick="switchTab('quick')">快速补录</div>
+        <div class="tab" onclick="switchTab('csv')">导入账单CSV</div>
+    </div>
+
+    <div class="tab-content active" id="tab-quick">
+        <div class="toolbar">
+            <button class="btn btn-secondary" onclick="addRow()">+ 添加一行</button>
+            <button class="btn btn-secondary" onclick="addRows(5)">+ 添加5行</button>
+            <button class="btn btn-secondary" onclick="fillDateToday()">今天日期</button>
+            <button class="btn btn-secondary" onclick="fillDateYesterday()">昨天日期</button>
+            <button class="btn btn-primary" onclick="submitQuickEntry()" id="submitBtn">提交记录</button>
+        </div>
+        <div style="overflow-x:auto;">
+            <table id="entryTable">
+                <thead>
+                    <tr>
+                        <th>日期</th>
+                        <th>时间</th>
+                        <th>描述</th>
+                        <th>金额</th>
+                        <th>分类（可留空自动识别）</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="entryBody"></tbody>
+            </table>
+        </div>
+        <div class="result" id="quickResult"></div>
+    </div>
+
+    <div class="tab-content" id="tab-csv">
+        <div class="upload-area" id="csvUploadArea" onclick="document.getElementById('csvFileInput').click()">
+            <div class="upload-icon">📄</div>
+            <div>点击选择 CSV 文件或拖拽到此处</div>
+            <div style="font-size:12px;color:#999;margin-top:5px;">支持微信支付账单、支付宝账单</div>
+        </div>
+        <input type="file" id="csvFileInput" accept=".csv" onchange="handleCsvFile(event)">
+        <div id="csvFileName" style="color:#667eea;font-weight:600;margin-bottom:10px;"></div>
+
+        <div id="csvPreviewArea" style="display:none;">
+            <div class="select-all-bar">
+                <label><input type="checkbox" id="selectAll" checked onchange="toggleSelectAll()"> 全选</label>
+                <span id="csvCount"></span>
+            </div>
+            <div class="toolbar">
+                <button class="btn btn-success" onclick="confirmCsvImport()" id="csvImportBtn">确认导入选中记录</button>
+            </div>
+            <div class="csv-preview" id="csvPreview"></div>
+        </div>
+        <div class="result" id="csvResult"></div>
+    </div>
+</div>
+
+<script>
+let TOKEN = '';
+let csvRecords = [];
+
+async function doLogin() {
+    const password = document.getElementById('loginPassword').value;
+    const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({password})
+    });
+    const data = await res.json();
+    if (data.success) {
+        TOKEN = data.token;
+        localStorage.setItem('admin_token', TOKEN);
+        document.getElementById('loginBox').style.display = 'none';
+        document.getElementById('app').style.display = 'block';
+        addRows(5);
+        loadCategories();
+    } else {
+        showResult('loginResult', data.error || '登录失败', 'error');
+    }
+}
+
+function checkLogin() {
+    const saved = localStorage.getItem('admin_token');
+    if (saved) {
+        TOKEN = saved;
+        document.getElementById('loginBox').style.display = 'none';
+        document.getElementById('app').style.display = 'block';
+        addRows(5);
+        loadCategories();
+    }
+}
+
+let allCategories = [];
+async function loadCategories() {
+    try {
+        const res = await fetch('/api/admin/categories', {
+            headers: {'Authorization': `Bearer ${TOKEN}`}
+        });
+        const data = await res.json();
+        if (data.success) {
+            allCategories = data.categories.map(c => c.category);
+        }
+    } catch(e) {}
+}
+
+function switchTab(tab) {
+    document.querySelectorAll('.tab').forEach((t, i) => {
+        t.classList.toggle('active', (tab === 'quick' && i === 0) || (tab === 'csv' && i === 1));
+    });
+    document.getElementById('tab-quick').classList.toggle('active', tab === 'quick');
+    document.getElementById('tab-csv').classList.toggle('active', tab === 'csv');
+}
+
+function createRow(date, time, desc, amount, category) {
+    const tr = document.createElement('tr');
+    const catOptions = allCategories.map(c => `<option value="${c}"${c===category?' selected':''}>${c}</option>`).join('');
+    tr.innerHTML = `
+        <td><input type="date" value="${date||''}"></td>
+        <td><input type="time" value="${time||'12:00'}"></td>
+        <td><input type="text" placeholder="描述" value="${desc||''}"></td>
+        <td><input type="number" step="0.01" min="0" placeholder="金额" value="${amount||''}"></td>
+        <td><input type="text" list="catList" placeholder="留空自动识别" value="${category||''}">
+            <datalist id="catList">${catOptions}</datalist></td>
+        <td class="row-actions"><button onclick="this.closest('tr').remove()">删</button></td>
+    `;
+    return tr;
+}
+
+function addRow(date, time, desc, amount, category) {
+    document.getElementById('entryBody').appendChild(createRow(date, time, desc, amount, category));
+}
+
+function addRows(n) {
+    for (let i = 0; i < n; i++) addRow();
+}
+
+function fillDateToday() {
+    const today = new Date().toISOString().split('T')[0];
+    document.querySelectorAll('#entryBody tr').forEach(tr => {
+        const dateInput = tr.querySelector('input[type="date"]');
+        if (!dateInput.value) dateInput.value = today;
+    });
+}
+
+function fillDateYesterday() {
+    const d = new Date(); d.setDate(d.getDate() - 1);
+    const yesterday = d.toISOString().split('T')[0];
+    document.querySelectorAll('#entryBody tr').forEach(tr => {
+        const dateInput = tr.querySelector('input[type="date"]');
+        if (!dateInput.value) dateInput.value = yesterday;
+    });
+}
+
+async function submitQuickEntry() {
+    const rows = document.querySelectorAll('#entryBody tr');
+    const items = [];
+    rows.forEach(tr => {
+        const inputs = tr.querySelectorAll('input');
+        const date = inputs[0].value;
+        const time = inputs[1].value;
+        const desc = inputs[2].value.trim();
+        const amount = parseFloat(inputs[3].value);
+        const category = inputs[4].value.trim();
+        if (desc && amount > 0) {
+            items.push({date, time, description: desc, amount, category});
+        }
+    });
+    if (!items.length) {
+        showResult('quickResult', '请至少填写一条有效记录（描述+金额）', 'error');
+        return;
+    }
+    document.getElementById('submitBtn').disabled = true;
+    document.getElementById('submitBtn').textContent = '提交中...';
+    try {
+        const res = await fetch('/api/admin/quick_entry', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}`},
+            body: JSON.stringify({items})
+        });
+        const data = await res.json();
+        if (data.success) {
+            showResult('quickResult', data.message, 'success');
+            document.getElementById('entryBody').innerHTML = '';
+            addRows(5);
+        } else {
+            showResult('quickResult', data.error || '提交失败', 'error');
+        }
+    } catch(e) {
+        showResult('quickResult', '网络错误: ' + e.message, 'error');
+    }
+    document.getElementById('submitBtn').disabled = false;
+    document.getElementById('submitBtn').textContent = '提交记录';
+}
+
+// CSV Import
+const csvUploadArea = document.getElementById('csvUploadArea');
+csvUploadArea.addEventListener('dragover', e => { e.preventDefault(); csvUploadArea.style.borderColor = '#764ba2'; });
+csvUploadArea.addEventListener('dragleave', () => { csvUploadArea.style.borderColor = '#667eea'; });
+csvUploadArea.addEventListener('drop', e => {
+    e.preventDefault();
+    csvUploadArea.style.borderColor = '#667eea';
+    if (e.dataTransfer.files[0]) uploadCsv(e.dataTransfer.files[0]);
+});
+
+function handleCsvFile(e) {
+    if (e.target.files[0]) uploadCsv(e.target.files[0]);
+}
+
+async function uploadCsv(file) {
+    if (!file.name.endsWith('.csv')) {
+        showResult('csvResult', '请上传 .csv 格式文件', 'error');
+        return;
+    }
+    document.getElementById('csvFileName').textContent = '已选择: ' + file.name;
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+        const res = await fetch('/api/admin/import_csv', {
+            method: 'POST',
+            headers: {'Authorization': `Bearer ${TOKEN}`},
+            body: formData
+        });
+        const data = await res.json();
+        if (data.success && data.records.length > 0) {
+            csvRecords = data.records;
+            renderCsvPreview();
+            document.getElementById('csvPreviewArea').style.display = 'block';
+            document.getElementById('csvCount').textContent = `共 ${data.total} 条支出记录`;
+            showResult('csvResult', data.message, 'success');
+        } else {
+            showResult('csvResult', data.error || '未识别到有效记录', 'error');
+        }
+    } catch(e) {
+        showResult('csvResult', '上传失败: ' + e.message, 'error');
+    }
+}
+
+function renderCsvPreview() {
+    const catOptions = allCategories.map(c => `<option value="${c}">${c}</option>`).join('');
+    let html = `<table><thead><tr>
+        <th class="checkbox-col"><input type="checkbox" checked id="selectAllHead" onchange="toggleSelectAll()"></th>
+        <th>日期</th><th>描述</th><th>金额</th><th>分类</th>
+    </tr></thead><tbody>`;
+    csvRecords.forEach((r, i) => {
+        html += `<tr data-idx="${i}">
+            <td class="checkbox-col"><input type="checkbox" class="csv-check" checked></td>
+            <td>${r.date || ''}</td>
+            <td><input type="text" value="${escHtml(r.description)}" class="csv-desc"></td>
+            <td>${r.amount.toFixed(2)}</td>
+            <td><input type="text" list="csvCatList" value="${escHtml(r.category)}" class="csv-cat" placeholder="留空归其他">
+                <datalist id="csvCatList">${catOptions}</datalist></td>
+        </tr>`;
+    });
+    html += '</tbody></table>';
+    document.getElementById('csvPreview').innerHTML = html;
+}
+
+function toggleSelectAll() {
+    const checked = document.getElementById('selectAll')?.checked ?? document.getElementById('selectAllHead')?.checked ?? true;
+    document.querySelectorAll('.csv-check').forEach(cb => cb.checked = checked);
+}
+
+async function confirmCsvImport() {
+    const rows = document.querySelectorAll('#csvPreview tbody tr');
+    const items = [];
+    rows.forEach((tr, i) => {
+        const cb = tr.querySelector('.csv-check');
+        if (!cb.checked) return;
+        const desc = tr.querySelector('.csv-desc').value.trim();
+        const cat = tr.querySelector('.csv-cat').value.trim();
+        const r = csvRecords[i];
+        items.push({
+            description: desc || r.description,
+            amount: r.amount,
+            category: cat || r.category || '',
+            date: r.date || '',
+            time: r.time || '12:00'
+        });
+    });
+    if (!items.length) {
+        showResult('csvResult', '请至少选择一条记录', 'error');
+        return;
+    }
+    document.getElementById('csvImportBtn').disabled = true;
+    document.getElementById('csvImportBtn').textContent = '导入中...';
+    try {
+        const res = await fetch('/api/admin/confirm_csv_import', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}`},
+            body: JSON.stringify({items})
+        });
+        const data = await res.json();
+        if (data.success) {
+            showResult('csvResult', data.message, 'success');
+            document.getElementById('csvPreviewArea').style.display = 'none';
+            csvRecords = [];
+        } else {
+            showResult('csvResult', data.error || '导入失败', 'error');
+        }
+    } catch(e) {
+        showResult('csvResult', '网络错误: ' + e.message, 'error');
+    }
+    document.getElementById('csvImportBtn').disabled = false;
+    document.getElementById('csvImportBtn').textContent = '确认导入选中记录';
+}
+
+function showResult(id, msg, type) {
+    const el = document.getElementById(id);
+    el.textContent = msg;
+    el.className = 'result ' + type;
+}
+
+function escHtml(s) {
+    return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+checkLogin();
+</script>
+</body>
+</html>

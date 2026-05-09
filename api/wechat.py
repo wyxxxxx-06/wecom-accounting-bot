@@ -33,6 +33,8 @@ PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 REPORT_TOKEN = os.environ.get("REPORT_TOKEN", "")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 ADMIN_SECRET = os.environ.get("ADMIN_SECRET", secrets.token_urlsafe(32))
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "730"))  # 默认保存2年
 ARCHIVE_BATCH = 200
 EXPORT_TTL_SECONDS = 600
@@ -858,6 +860,51 @@ def get_category_candidates() -> list:
     elif "其他" not in categories:
         categories = list(categories) + ["其他"]
     return categories
+
+
+def ai_classify(description: str, categories: list) -> str:
+    """使用 DeepSeek AI 推断分类。返回分类名或空字符串（表示不确定）。"""
+    if not DEEPSEEK_API_KEY:
+        return ""
+    if not categories:
+        return ""
+    try:
+        cat_list = "、".join(categories)
+        prompt = (
+            f"你是一个记账分类助手。用户记了一笔消费，描述是「{description}」。\n"
+            f"可选分类有：{cat_list}\n"
+            f"请判断这笔消费最可能属于哪个分类。\n"
+            f"规则：\n"
+            f"1. 如果你有 80% 以上的把握，直接回复分类名（只回复分类名，不要其他文字）\n"
+            f"2. 如果不确定，回复「不确定」\n"
+            f"只回复分类名或「不确定」，不要解释。"
+        )
+        response = httpx.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": DEEPSEEK_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 20,
+                "temperature": 0.1
+            },
+            timeout=5.0
+        )
+        response.raise_for_status()
+        data = response.json()
+        result = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        if result == "不确定" or not result:
+            return ""
+        for cat in categories:
+            if result == cat or cat in result:
+                return cat
+        return ""
+    except Exception as e:
+        print(f"AI分类错误: {str(e)[:100]}")
+        return ""
 
 
 def build_category_pick_prompt(description: str, amount: float, categories: list) -> str:
@@ -2099,31 +2146,31 @@ def get_help_text() -> str:
     return """📖 记账机器人使用指南
 
 【记账】
-发送：分类 描述 金额
-例如：夜宵 鸡锁骨 18
-      买菜 西红柿 25
-也支持：描述 金额 / 金额 描述（自动分类）
+发送：描述 金额（AI自动分类）
+例如：早餐 15 / 打车 30 / 咖啡18
+
+【批量补记】
+发送多行（每行可带日期）：
+补记
+5/5 早餐 8
+5/5 午餐 25
+5/6 咖啡 15
 
 【查询统计】
-发送：今日 / 昨日 / 七天 / 本周 / 本月
-发送：统计 1月 / 统计面板
+今日 / 昨日 / 七天 / 本周 / 本月
+统计 1月 / 统计面板
 
-【查看明细】
-发送：明细 / 明细 昨天
+【明细】明细 / 明细 昨天
 
-【修改/删除记录】
-发送：改 1 描述 金额
-发送：删 2 / 删 1-4
-确认删除：确认删 / 取消删
+【修改/删除】
+改 1 描述 金额 / 删 2 / 删 1-4
 
-【补记】
-发送：补记 昨天 买烟 50
+【补记单条】补记 昨天 买烟 50
 
-【导出Excel】
-发送：导出 本月 / 导出 全部
+【导出】导出 本月 / 导出 全部
 
-【管理后台】
-发送：网页
+【管理后台】发送：网页
+（支持快速补录、导入账单CSV）
 
 💡 发送 帮助 查看完整指南"""
 
@@ -2163,29 +2210,72 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
         else:
             return build_category_pick_prompt(pending_pick["description"], pending_pick["amount"], pending_pick["categories"])
 
-    # 批量记账：一行一条
-    if "批量" in content or "\n" in content or "；" in content or ";" in content:
-        raw = content.replace("批量", "").strip()
+    # 批量补记 / 批量记账：支持每行带日期前缀
+    # 格式：补记\n5/5 早餐 8\n5/5 午餐 25\n5/6 咖啡 15
+    # 或：批量\n早餐 8;午餐 25;打车 30
+    is_batch_backfill = content.startswith("补记") and ("\n" in content or "；" in content or ";" in content)
+    is_batch = "批量" in content or "\n" in content or "；" in content or ";" in content
+
+    if is_batch_backfill or is_batch:
+        raw = content
+        if is_batch_backfill:
+            raw = content[len("补记"):].strip()
+        else:
+            raw = content.replace("批量", "").strip()
         raw = raw.replace("；", "\n").replace(";", "\n")
         lines = [l.strip() for l in raw.splitlines() if l.strip()]
         if len(lines) >= 2:
             success = 0
             failed = []
+            categories_for_ai = get_category_candidates()
+            current_date = None
+
             for line in lines:
-                parsed_line = parse_record_text(line)
+                record_date = None
+                record_text = line
+
+                # 尝试解析行首日期：5/5、5-5、05-05、5月5日、2026-05-05、2026/5/5
+                date_line_match = re.match(
+                    r'^(?:(\d{4})[/\-年])?\s*(\d{1,2})[/\-月]\s*(\d{1,2})[日号]?\s+(.+)$',
+                    line
+                )
+                if date_line_match:
+                    year_str, month_str, day_str, rest = date_line_match.groups()
+                    try:
+                        now = datetime.now(LOCAL_TZ)
+                        year = int(year_str) if year_str else now.year
+                        month = int(month_str)
+                        day = int(day_str)
+                        record_date = datetime(year, month, day, 12, 0, 0, tzinfo=LOCAL_TZ)
+                        if record_date > now:
+                            record_date = record_date.replace(year=year - 1)
+                        record_text = rest.strip()
+                        current_date = record_date
+                    except (ValueError, TypeError):
+                        pass
+
+                # 如果没有日期前缀但之前有设定日期（日期分组模式）
+                if record_date is None and current_date is not None and is_batch_backfill:
+                    record_date = current_date
+
+                parsed_line = parse_record_text(record_text)
                 if parsed_line["type"] == "record":
                     try:
                         alias_category = match_alias_category(parsed_line["description"])
                         if not alias_category:
-                            failed.append(line + "（未匹配分类，请单独发送「记一笔 备注 金额」以选择分类）")
+                            alias_category = ai_classify(parsed_line["description"], categories_for_ai)
+                        if not alias_category:
+                            failed.append(line + "（未匹配分类）")
                             continue
                         category = alias_category
+                        add_category_alias(parsed_line["description"], category)
                         add_record(
                             openid=openid,
                             nickname=nickname,
                             amount=parsed_line["amount"],
                             category=category,
-                            description=parsed_line["description"]
+                            description=parsed_line["description"],
+                            created_at=record_date
                         )
                         success += 1
                     except Exception:
@@ -2219,8 +2309,21 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             else:
                 alias_category = match_alias_category(parsed["description"])
                 if not alias_category:
-                    # 未出现过的备注：一定让用户自己选择分类，不自动归到任何类
+                    # 尝试 AI 分类
                     categories = get_category_candidates()
+                    ai_result = ai_classify(parsed["description"], categories)
+                    if ai_result:
+                        category = ai_result
+                        add_category_alias(parsed["description"], category)
+                        add_record(
+                            openid=openid,
+                            nickname=nickname,
+                            amount=parsed["amount"],
+                            category=category,
+                            description=parsed["description"]
+                        )
+                        return f"✅ 记账成功！\n{parsed['description']}：{parsed['amount']:.2f} 元\n分类：{category}（AI自动分类）"
+                    # AI 也不确定，让用户选择
                     PENDING_CATEGORY_PICKS[openid] = {
                         "ts": time.time(),
                         "description": parsed["description"],
@@ -2229,7 +2332,6 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                     }
                     return build_category_pick_prompt(parsed["description"], parsed["amount"], categories)
                 category = alias_category
-                # 仅当用户选过并记住的别名才自动学习，此处已是匹配到的
                 add_category_alias(parsed["description"], category)
             add_record(
                 openid=openid,
@@ -2907,6 +3009,287 @@ async def admin_import_excel(file: UploadFile = File(...), payload: dict = Depen
         return {"success": True, "updated": result["success"], "failed": len(result["failed"]), "message": f"已更新 {result['success']} 条，失败 {len(result['failed'])} 条"}
     except Exception as e:
         print(f"导入错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+def parse_wechat_csv(file_bytes: bytes) -> list:
+    """解析微信支付账单 CSV"""
+    import csv
+    records = []
+    try:
+        text = file_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        text = file_bytes.decode("gbk", errors="ignore")
+    lines = text.splitlines()
+    header_idx = -1
+    for i, line in enumerate(lines):
+        if "交易时间" in line and "交易类型" in line:
+            header_idx = i
+            break
+    if header_idx < 0:
+        return []
+    reader = csv.reader(lines[header_idx:])
+    headers = next(reader, [])
+    headers = [h.strip().strip("\ufeff") for h in headers]
+    time_col = next((i for i, h in enumerate(headers) if "交易时间" in h), None)
+    type_col = next((i for i, h in enumerate(headers) if "交易类型" in h), None)
+    counterpart_col = next((i for i, h in enumerate(headers) if "交易对方" in h), None)
+    goods_col = next((i for i, h in enumerate(headers) if "商品" in h), None)
+    amount_col = next((i for i, h in enumerate(headers) if "金额" in h), None)
+    inout_col = next((i for i, h in enumerate(headers) if "收/支" in h or "收／支" in h), None)
+
+    for row in reader:
+        if not row or len(row) < max(filter(None, [time_col, amount_col, goods_col]), default=0) + 1:
+            continue
+        try:
+            inout = row[inout_col].strip() if inout_col is not None else ""
+            if "支出" not in inout:
+                continue
+            amount_str = row[amount_col].strip().replace("¥", "").replace(",", "").strip() if amount_col is not None else ""
+            amount = float(amount_str)
+            if amount <= 0:
+                continue
+            time_str = row[time_col].strip() if time_col is not None else ""
+            description = row[goods_col].strip() if goods_col is not None else ""
+            counterpart = row[counterpart_col].strip() if counterpart_col is not None else ""
+            if not description or description == "/":
+                description = counterpart or "未知"
+            created_at = None
+            if time_str:
+                for fmt in ["%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M"]:
+                    try:
+                        created_at = datetime.strptime(time_str, fmt).replace(tzinfo=LOCAL_TZ)
+                        break
+                    except ValueError:
+                        continue
+            records.append({
+                "amount": amount,
+                "description": description,
+                "counterpart": counterpart,
+                "created_at": created_at
+            })
+        except (ValueError, IndexError):
+            continue
+    return records
+
+
+def parse_alipay_csv(file_bytes: bytes) -> list:
+    """解析支付宝账单 CSV"""
+    import csv
+    records = []
+    try:
+        text = file_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        text = file_bytes.decode("gbk", errors="ignore")
+    lines = text.splitlines()
+    header_idx = -1
+    for i, line in enumerate(lines):
+        if "交易时间" in line and ("商品说明" in line or "商品名称" in line):
+            header_idx = i
+            break
+        if "交易创建时间" in line:
+            header_idx = i
+            break
+    if header_idx < 0:
+        return []
+    reader = csv.reader(lines[header_idx:])
+    headers = next(reader, [])
+    headers = [h.strip().strip("\ufeff").strip("\t") for h in headers]
+    time_col = next((i for i, h in enumerate(headers) if "交易时间" in h or "交易创建时间" in h), None)
+    goods_col = next((i for i, h in enumerate(headers) if "商品" in h), None)
+    counterpart_col = next((i for i, h in enumerate(headers) if "交易对方" in h or "对方" in h), None)
+    amount_col = next((i for i, h in enumerate(headers) if "金额" in h), None)
+    inout_col = next((i for i, h in enumerate(headers) if "收/支" in h or "收／支" in h), None)
+
+    for row in reader:
+        if not row or len(row) < 4:
+            continue
+        row = [c.strip().strip("\t") for c in row]
+        try:
+            inout = row[inout_col].strip() if inout_col is not None else ""
+            if "支出" not in inout:
+                continue
+            amount_str = row[amount_col].strip().replace(",", "") if amount_col is not None else ""
+            amount = float(amount_str)
+            if amount <= 0:
+                continue
+            time_str = row[time_col].strip() if time_col is not None else ""
+            description = row[goods_col].strip() if goods_col is not None else ""
+            counterpart = row[counterpart_col].strip() if counterpart_col is not None else ""
+            if not description or description == "/":
+                description = counterpart or "未知"
+            created_at = None
+            if time_str:
+                for fmt in ["%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M"]:
+                    try:
+                        created_at = datetime.strptime(time_str, fmt).replace(tzinfo=LOCAL_TZ)
+                        break
+                    except ValueError:
+                        continue
+            records.append({
+                "amount": amount,
+                "description": description,
+                "counterpart": counterpart,
+                "created_at": created_at
+            })
+        except (ValueError, IndexError):
+            continue
+    return records
+
+
+@app.get("/api/admin/quick_entry", response_class=HTMLResponse)
+async def admin_quick_entry_page():
+    """快速补录页面"""
+    import os
+    html_path = os.path.join(os.path.dirname(__file__), "quick_entry.html")
+    try:
+        with open(html_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return "<h1>快速补录页面未找到</h1>"
+
+
+@app.post("/api/admin/quick_entry")
+async def admin_quick_entry(request: Request, payload: dict = Depends(verify_admin_token)):
+    """快速补录：批量新增记录"""
+    try:
+        data = await request.json()
+        items = data.get("items", [])
+        if not items:
+            return {"success": False, "error": "没有记录"}
+        categories_for_ai = get_category_candidates()
+        success = 0
+        failed = 0
+        for item in items:
+            try:
+                description = (item.get("description") or "").strip()
+                amount = float(item.get("amount", 0))
+                category = (item.get("category") or "").strip()
+                date_str = (item.get("date") or "").strip()
+                time_str = (item.get("time") or "12:00").strip()
+                if not description or amount <= 0:
+                    failed += 1
+                    continue
+                if not category:
+                    category = match_alias_category(description)
+                if not category:
+                    category = ai_classify(description, categories_for_ai)
+                if not category:
+                    category = "其他"
+                created_at = None
+                if date_str:
+                    try:
+                        dt_str = f"{date_str} {time_str}"
+                        created_at = datetime.strptime(dt_str, "%Y-%m-%d %H:%M").replace(tzinfo=LOCAL_TZ)
+                    except ValueError:
+                        pass
+                add_record(
+                    openid="admin",
+                    nickname="管理员",
+                    amount=amount,
+                    category=category,
+                    description=description,
+                    created_at=created_at
+                )
+                add_category_alias(description, category)
+                success += 1
+            except Exception:
+                failed += 1
+        return {"success": True, "added": success, "failed": failed, "message": f"成功录入 {success} 条，失败 {failed} 条"}
+    except Exception as e:
+        print(f"快速补录错误: {str(e)[:100]}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/admin/import_csv")
+async def admin_import_csv(file: UploadFile = File(...), payload: dict = Depends(verify_admin_token)):
+    """导入微信/支付宝账单 CSV"""
+    try:
+        file_bytes = await file.read()
+        filename = file.filename or ""
+        text_preview = ""
+        try:
+            text_preview = file_bytes[:2000].decode("utf-8")
+        except UnicodeDecodeError:
+            text_preview = file_bytes[:2000].decode("gbk", errors="ignore")
+
+        if "支付宝" in filename or "支付宝" in text_preview or "交易号" in text_preview:
+            records = parse_alipay_csv(file_bytes)
+        else:
+            records = parse_wechat_csv(file_bytes)
+
+        if not records:
+            return {"success": False, "error": "未识别到有效的支出记录，请确认是微信或支付宝账单CSV", "records": []}
+
+        categories_for_ai = get_category_candidates()
+        for r in records:
+            alias_cat = match_alias_category(r["description"])
+            if alias_cat:
+                r["category"] = alias_cat
+            else:
+                ai_cat = ai_classify(r["description"], categories_for_ai)
+                r["category"] = ai_cat if ai_cat else ""
+            r["date"] = r["created_at"].strftime("%Y-%m-%d") if r.get("created_at") else ""
+            r["time"] = r["created_at"].strftime("%H:%M") if r.get("created_at") else ""
+
+        preview = []
+        for r in records[:200]:
+            preview.append({
+                "description": r["description"],
+                "amount": r["amount"],
+                "category": r["category"],
+                "date": r.get("date", ""),
+                "time": r.get("time", ""),
+                "counterpart": r.get("counterpart", "")
+            })
+        return {"success": True, "records": preview, "total": len(records), "message": f"识别到 {len(records)} 条支出记录"}
+    except Exception as e:
+        print(f"CSV导入错误: {str(e)[:200]}")
+        return {"success": False, "error": str(e), "records": []}
+
+
+@app.post("/api/admin/confirm_csv_import")
+async def admin_confirm_csv_import(request: Request, payload: dict = Depends(verify_admin_token)):
+    """确认导入 CSV 账单记录"""
+    try:
+        data = await request.json()
+        items = data.get("items", [])
+        if not items:
+            return {"success": False, "error": "没有记录"}
+        success = 0
+        failed = 0
+        for item in items:
+            try:
+                description = (item.get("description") or "").strip()
+                amount = float(item.get("amount", 0))
+                category = (item.get("category") or "其他").strip()
+                date_str = (item.get("date") or "").strip()
+                time_str = (item.get("time") or "12:00").strip()
+                if not description or amount <= 0:
+                    failed += 1
+                    continue
+                created_at = None
+                if date_str:
+                    try:
+                        dt_str = f"{date_str} {time_str}"
+                        created_at = datetime.strptime(dt_str, "%Y-%m-%d %H:%M").replace(tzinfo=LOCAL_TZ)
+                    except ValueError:
+                        pass
+                add_record(
+                    openid="csv_import",
+                    nickname="账单导入",
+                    amount=amount,
+                    category=category,
+                    description=description,
+                    created_at=created_at
+                )
+                add_category_alias(description, category)
+                success += 1
+            except Exception:
+                failed += 1
+        return {"success": True, "added": success, "failed": failed, "message": f"成功导入 {success} 条，失败 {failed} 条"}
+    except Exception as e:
+        print(f"确认CSV导入错误: {str(e)[:100]}")
         return {"success": False, "error": str(e)}
 
 
