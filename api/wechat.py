@@ -457,11 +457,15 @@ def update_record(record_id: int, amount: float, category: str, description: str
 
 
 def delete_record(record_id: int):
-    """删除记账记录"""
+    """删除记账记录，返回 True/False 表示是否成功"""
     supabase = get_supabase_client()
     result = supabase.table("records").delete().eq("id", record_id).execute()
-    invalidate_records_cache()  # 清除缓存
-    return result
+    invalidate_records_cache()
+    # 验证删除是否真正生效
+    check = supabase.table("records").select("id").eq("id", record_id).limit(1).execute()
+    if check.data:
+        return False  # 记录仍然存在，删除被 RLS 阻止
+    return True
 
 
 def archive_deleted_record(record: dict, deleted_by: str):
@@ -982,8 +986,7 @@ def handle_ai_intent(openid: str, nickname: str, content: str) -> str:
             return f"❌ 没找到包含「{desc}」的记录"
         record = matched[0]
         archive_deleted_record(record, deleted_by=openid)
-        result = delete_record(record["id"])
-        if not getattr(result, "data", []):
+        if not delete_record(record["id"]):
             return "❌ 删除失败"
         return f"✅ 已删除：{record['description']} {float(record['amount']):.2f}元 [{record['category']}]"
 
@@ -2799,8 +2802,7 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 return "📝 暂无可撤销记录"
             record = records[0]
             archive_deleted_record(record, deleted_by=openid)
-            result = delete_record(record["id"])
-            if not getattr(result, "data", []):
+            if not delete_record(record["id"]):
                 return "❌ 撤销失败，可能没有权限（请检查 RLS 策略）"
             return f"✅ 已撤销：{record['description']} {float(record['amount']):.2f}元"
         except Exception as e:
@@ -2934,8 +2936,7 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             deleted = 0
             for record in pending["items"]:
                 archive_deleted_record(record, deleted_by=openid)
-                result = delete_record(record["id"])
-                if getattr(result, "data", []):
+                if delete_record(record["id"]):
                     deleted += 1
 
             PENDING_DELETES.pop(openid, None)
@@ -3235,8 +3236,7 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 return f"❌ 没找到包含「{desc}」的记录"
             record = matched[0]
             archive_deleted_record(record, deleted_by=openid)
-            result = delete_record(record["id"])
-            if not getattr(result, "data", []):
+            if not delete_record(record["id"]):
                 return "❌ 删除失败，可能没有权限（请检查 RLS 策略）"
             dt = to_local_datetime(record["created_at"])
             return f"✅ 已删除：{dt.strftime('%m-%d %H:%M')} {record['description']} {float(record['amount']):.2f}元 [{record['category']}]"
@@ -4186,11 +4186,10 @@ async def admin_delete_record(
 ):
     """删除记录"""
     try:
-        result = delete_record(record_id)
-        if result.data:
+        if delete_record(record_id):
             return {"success": True}
         else:
-            return {"success": False, "error": "删除失败"}
+            return {"success": False, "error": "删除失败，可能被 RLS 策略阻止"}
     except Exception as e:
         print(f"删除记录错误: {str(e)[:100]}")
         return {"success": False, "error": str(e)}
@@ -5085,8 +5084,7 @@ async def admin_batch_delete_records(
         
         deleted_count = 0
         for record_id in record_ids:
-            result = delete_record(record_id)
-            if result.get("success"):
+            if delete_record(record_id):
                 deleted_count += 1
         
         return {
