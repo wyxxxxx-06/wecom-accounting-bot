@@ -863,48 +863,128 @@ def get_category_candidates() -> list:
 
 
 def ai_classify(description: str, categories: list) -> str:
-    """使用 DeepSeek AI 推断分类。返回分类名或空字符串（表示不确定）。"""
+    """使用 DeepSeek AI 推断分类（旧接口兼容）。返回分类名或空字符串。"""
+    result = ai_smart_classify(description)
+    if result:
+        return result
+    return ""
+
+
+def _call_deepseek(prompt: str, max_tokens: int = 60) -> str:
+    """调用 DeepSeek API，返回文本结果"""
     if not DEEPSEEK_API_KEY:
         return ""
-    if not categories:
+    response = httpx.post(
+        "https://api.deepseek.com/chat/completions",
+        headers={
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": DEEPSEEK_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0.1
+        },
+        timeout=8.0
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+
+def ai_smart_classify(description: str) -> str:
+    """智能 AI 分类：查库 → AI推断归到最近的分类 → 新建分类。
+    返回最终分类名（二级路径格式如 '餐饮|买菜'），或空字符串表示失败。
+    """
+    if not DEEPSEEK_API_KEY:
         return ""
+
+    tree_paths = get_category_tree_paths()
+    all_cats = get_all_categories()
+
+    if tree_paths:
+        tree_info = "\n".join(f"  - {p}" for p in sorted(tree_paths))
+    elif all_cats:
+        tree_info = "\n".join(f"  - {c}" for c in all_cats)
+    else:
+        tree_info = "  （暂无分类，需要你新建）"
+
+    prompt = (
+        f"你是一个个人记账分类助手。用户记了一笔消费：「{description}」\n\n"
+        f"当前已有的分类体系（用 | 分隔层级，如 '餐饮|早餐' 表示一级是餐饮，二级是早餐）：\n"
+        f"{tree_info}\n\n"
+        f"请帮用户把这笔消费归类。规则：\n"
+        f"1. 如果已有分类中有完全匹配的二级分类（如已有 '餐饮|买菜'），直接返回该二级分类名（只返回最末级名称，如 '买菜'）\n"
+        f"2. 如果已有的一级分类中有合适的父类（如 '餐饮' 适合 '买菜'），返回格式：一级分类|新二级名称（如 '餐饮|买菜'）\n"
+        f"3. 如果现有分类都不合适，新建一个合理的一级分类并归入，返回格式：新一级|新二级（如 '生活|买菜'）\n"
+        f"4. 二级分类名应该简短、通用（如 '买菜' 而不是 '买西红柿'）\n\n"
+        f"只回复分类结果，格式为 '一级|二级' 或已有的分类名，不要解释。"
+    )
+
     try:
-        cat_list = "、".join(categories)
-        prompt = (
-            f"你是一个记账分类助手。用户记了一笔消费，描述是「{description}」。\n"
-            f"可选分类有：{cat_list}\n"
-            f"请判断这笔消费最可能属于哪个分类。\n"
-            f"规则：\n"
-            f"1. 如果你有 80% 以上的把握，直接回复分类名（只回复分类名，不要其他文字）\n"
-            f"2. 如果不确定，回复「不确定」\n"
-            f"只回复分类名或「不确定」，不要解释。"
-        )
-        response = httpx.post(
-            "https://api.deepseek.com/chat/completions",
-            headers={
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": DEEPSEEK_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 20,
-                "temperature": 0.1
-            },
-            timeout=5.0
-        )
-        response.raise_for_status()
-        data = response.json()
-        result = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-        if result == "不确定" or not result:
+        result = _call_deepseek(prompt)
+        if not result or result == "不确定":
             return ""
-        for cat in categories:
-            if result == cat or cat in result:
-                return cat
-        return ""
+
+        result = result.strip().strip("'\"「」")
+
+        if CATEGORY_TREE_SEP in result:
+            parts = result.split(CATEGORY_TREE_SEP)
+            l1 = parts[0].strip()
+            l2 = parts[1].strip() if len(parts) > 1 else ""
+            if l1 and l2:
+                _ensure_category_in_tree(l1, l2)
+                return l2
+            elif l1:
+                _ensure_category_in_tree(l1, "")
+                return l1
+
+        if result in all_cats:
+            return result
+
+        if tree_paths:
+            for p in tree_paths:
+                parts = p.split(CATEGORY_TREE_SEP)
+                for part in parts:
+                    if part == result:
+                        return result
+
+        _ensure_category_in_tree(result, "")
+        return result
+
     except Exception as e:
-        print(f"AI分类错误: {str(e)[:100]}")
+        print(f"AI智能分类错误: {str(e)[:100]}")
         return ""
+
+
+def _ensure_category_in_tree(l1: str, l2: str):
+    """确保分类路径存在于类目树中，不存在则自动添加"""
+    if not l1:
+        return
+    tree_paths = get_category_tree_paths()
+    if tree_paths is None:
+        tree_paths = []
+
+    l1_path = l1
+    need_save = False
+
+    if l1_path not in tree_paths:
+        tree_paths.append(l1_path)
+        need_save = True
+
+    if l2:
+        l2_path = f"{l1}{CATEGORY_TREE_SEP}{l2}"
+        if l2_path not in tree_paths:
+            tree_paths.append(l2_path)
+            need_save = True
+
+    if need_save:
+        set_category_tree(tree_paths)
+        presets = get_category_presets()
+        final_cat = l2 if l2 else l1
+        if final_cat not in presets:
+            add_category_preset(final_cat)
 
 
 def build_category_pick_prompt(description: str, amount: float, categories: list) -> str:
@@ -2263,10 +2343,9 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                     try:
                         alias_category = match_alias_category(parsed_line["description"])
                         if not alias_category:
-                            alias_category = ai_classify(parsed_line["description"], categories_for_ai)
+                            alias_category = ai_smart_classify(parsed_line["description"])
                         if not alias_category:
-                            failed.append(line + "（未匹配分类）")
-                            continue
+                            alias_category = "其他"
                         category = alias_category
                         add_category_alias(parsed_line["description"], category)
                         add_record(
@@ -2308,10 +2387,10 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 category = parsed["category"]
             else:
                 alias_category = match_alias_category(parsed["description"])
-                if not alias_category:
-                    # 尝试 AI 分类
-                    categories = get_category_candidates()
-                    ai_result = ai_classify(parsed["description"], categories)
+                if alias_category:
+                    category = alias_category
+                else:
+                    ai_result = ai_smart_classify(parsed["description"])
                     if ai_result:
                         category = ai_result
                         add_category_alias(parsed["description"], category)
@@ -2322,17 +2401,19 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                             category=category,
                             description=parsed["description"]
                         )
-                        return f"✅ 记账成功！\n{parsed['description']}：{parsed['amount']:.2f} 元\n分类：{category}（AI自动分类）"
-                    # AI 也不确定，让用户选择
-                    PENDING_CATEGORY_PICKS[openid] = {
-                        "ts": time.time(),
-                        "description": parsed["description"],
-                        "amount": parsed["amount"],
-                        "categories": categories
-                    }
-                    return build_category_pick_prompt(parsed["description"], parsed["amount"], categories)
-                category = alias_category
-                add_category_alias(parsed["description"], category)
+                        return f"✅ 记账成功！\n{parsed['description']}：{parsed['amount']:.2f} 元\n分类：{category}（AI智能分类）"
+                    categories = get_category_candidates()
+                    if len(categories) <= 1:
+                        category = "其他"
+                        add_category_alias(parsed["description"], category)
+                    else:
+                        PENDING_CATEGORY_PICKS[openid] = {
+                            "ts": time.time(),
+                            "description": parsed["description"],
+                            "amount": parsed["amount"],
+                            "categories": categories
+                        }
+                        return build_category_pick_prompt(parsed["description"], parsed["amount"], categories)
             add_record(
                 openid=openid,
                 nickname=nickname,
