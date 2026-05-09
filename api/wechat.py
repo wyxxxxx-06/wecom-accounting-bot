@@ -3018,6 +3018,27 @@ async def health():
     return Response(content="ok", media_type="text/plain")
 
 
+@app.get("/api/debug_db")
+async def debug_db():
+    """诊断数据库连接"""
+    import traceback
+    info = {
+        "supabase_url": SUPABASE_URL[:30] + "..." if SUPABASE_URL else "(empty)",
+        "supabase_key_prefix": SUPABASE_KEY[:20] + "..." if SUPABASE_KEY else "(empty)",
+        "deepseek_key": "set" if DEEPSEEK_API_KEY else "(empty)",
+    }
+    try:
+        supabase = get_supabase_client()
+        result = supabase.table("records").select("id").limit(1).execute()
+        info["db_status"] = "OK"
+        info["db_result"] = str(result.data)
+    except Exception as e:
+        info["db_status"] = "ERROR"
+        info["db_error"] = str(e)
+        info["db_traceback"] = traceback.format_exc()[-500:]
+    return info
+
+
 @app.head("/api/health")
 async def health_head():
     """健康检查（HEAD）"""
