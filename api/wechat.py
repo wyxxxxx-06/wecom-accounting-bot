@@ -35,6 +35,7 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 ADMIN_SECRET = os.environ.get("ADMIN_SECRET", secrets.token_urlsafe(32))
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+DEEPSEEK_VISION_MODEL = os.environ.get("DEEPSEEK_VISION_MODEL", "deepseek-chat")
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "730"))  # 默认保存2年
 ARCHIVE_BATCH = 200
 EXPORT_TTL_SECONDS = 600
@@ -985,6 +986,110 @@ def _ensure_category_in_tree(l1: str, l2: str):
         final_cat = l2 if l2 else l1
         if final_cat not in presets:
             add_category_preset(final_cat)
+
+
+def ai_recognize_image(image_url: str) -> list:
+    """用 DeepSeek 视觉模型识别图片中的消费记录。
+    返回 [{"description": "...", "amount": 12.5}, ...] 或空列表。
+    """
+    if not DEEPSEEK_API_KEY:
+        return []
+    try:
+        prompt = (
+            "你是一个记账助手。请识别这张图片中的消费信息。\n"
+            "图片可能是：小票、账单截图、转账记录、外卖订单截图等。\n"
+            "请提取每一笔消费的【描述】和【金额】。\n\n"
+            "规则：\n"
+            "1. 只提取实际消费金额，忽略优惠前原价\n"
+            "2. 如果有多笔消费，全部列出\n"
+            "3. 描述要简短（2-6个字），如：午餐、咖啡、打车\n"
+            "4. 如果图片不是消费相关的，返回空\n\n"
+            "严格按以下 JSON 格式返回，不要其他文字：\n"
+            '[{"description": "描述", "amount": 金额}]\n'
+            "如果无法识别，返回：[]"
+        )
+        response = httpx.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": DEEPSEEK_VISION_MODEL,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": image_url}},
+                        {"type": "text", "text": prompt}
+                    ]
+                }],
+                "max_tokens": 300,
+                "temperature": 0.1
+            },
+            timeout=15.0
+        )
+        response.raise_for_status()
+        data = response.json()
+        result_text = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        if not result_text or result_text == "[]":
+            return []
+        start = result_text.find("[")
+        end = result_text.rfind("]") + 1
+        if start >= 0 and end > start:
+            result_text = result_text[start:end]
+        items = json.loads(result_text)
+        valid = []
+        for item in items:
+            desc = str(item.get("description", "")).strip()
+            try:
+                amount = float(item.get("amount", 0))
+            except (ValueError, TypeError):
+                continue
+            if desc and amount > 0:
+                valid.append({"description": desc, "amount": amount})
+        return valid
+    except Exception as e:
+        print(f"图片识别错误: {str(e)[:150]}")
+        return []
+
+
+def handle_image_message(openid: str, nickname: str, pic_url: str) -> str:
+    """处理图片消息：识别消费并自动记账"""
+    if not DEEPSEEK_API_KEY:
+        return "❌ AI 功能未配置，无法识别图片"
+
+    items = ai_recognize_image(pic_url)
+    if not items:
+        return "🤔 未能从图片中识别到消费记录。\n支持：小票、账单截图、转账记录、外卖订单等。"
+
+    success = 0
+    results = []
+    for item in items:
+        desc = item["description"]
+        amount = item["amount"]
+        alias_category = match_alias_category(desc)
+        if not alias_category:
+            alias_category = ai_smart_classify(desc)
+        if not alias_category:
+            alias_category = "其他"
+        category = alias_category
+        add_category_alias(desc, category)
+        try:
+            add_record(
+                openid=openid,
+                nickname=nickname,
+                amount=amount,
+                category=category,
+                description=desc
+            )
+            success += 1
+            results.append(f"  {desc} {amount:.2f}元 → {category}")
+        except Exception:
+            results.append(f"  {desc} {amount:.2f}元 → ❌失败")
+
+    msg = f"📷 图片识别记账完成！成功 {success}/{len(items)} 条\n"
+    msg += "\n".join(results)
+    return msg
 
 
 def build_category_pick_prompt(description: str, amount: float, categories: list) -> str:
@@ -2935,20 +3040,24 @@ async def webhook(request: Request):
         msg_id_node = xml_tree.find("MsgId")
         msg_id = msg_id_node.text if msg_id_node is not None else ""
         
-        # 只处理文本消息
-        if msg_type != "text":
+        if msg_type not in ("text", "image"):
             return Response(content="success", media_type="text/plain")
-        
-        content = xml_tree.find("Content").text
 
         if msg_id and is_duplicate_message(msg_id):
             return Response(content="success", media_type="text/plain")
         
-        # 获取用户信息（可选，需要 access_token）
-        nickname = from_user[:8]  # 暂时用 openid 前8位作为标识
+        nickname = from_user[:8]
         
-        # 处理消息
-        reply_content = handle_message(from_user, nickname, content)
+        if msg_type == "image":
+            pic_url_node = xml_tree.find("PicUrl")
+            pic_url = pic_url_node.text if pic_url_node is not None else ""
+            if not pic_url:
+                reply_content = "❌ 未能获取图片地址"
+            else:
+                reply_content = handle_image_message(from_user, nickname, pic_url)
+        else:
+            content = xml_tree.find("Content").text
+            reply_content = handle_message(from_user, nickname, content)
 
         if msg_id:
             record_message_id(msg_id)
