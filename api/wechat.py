@@ -1298,6 +1298,26 @@ def parse_message(content: str) -> dict:
             }
         return {"type": "unknown"}
 
+    # 按描述删除记录：删除凉皮、删掉刚才记录的凉皮
+    del_by_desc_match = re.match(r'^(删除|删掉)(刚才记录的|最近的|最近记录的|刚记的)?\s*(.+?)(的记录)?$', content)
+    if del_by_desc_match:
+        raw_desc = del_by_desc_match.group(3).strip()
+        if raw_desc and not re.match(r'^[\d\s,，\-]+$', raw_desc):
+            return {"type": "delete_by_desc", "description": raw_desc}
+
+    # 重新归类：重新归类凉皮、归类一下凉皮
+    reclassify_match = re.match(r'^(重新)?归类(一下)?\s*(.+)$', content)
+    if reclassify_match:
+        desc = reclassify_match.group(3).strip()
+        return {"type": "reclassify_by_desc", "description": desc}
+
+    # 新建分组并归类：新建分组 夜宵 把凉皮记录在里
+    create_group_match = re.match(r'^新建(一个)?分组\s+(\S+)(?:\s+把(.+?)(?:记录在里|归到里面|放进去|移过去))?$', content)
+    if create_group_match:
+        group_name = create_group_match.group(2).strip()
+        move_desc = (create_group_match.group(3) or "").strip()
+        return {"type": "create_group_move", "group": group_name, "description": move_desc}
+
     # 记录修改/删除
     edit_match = re.match(r'^(改|修改)\s+(\d+)\s+(.+)$', content)
     if edit_match:
@@ -2490,6 +2510,8 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
         try:
             if parsed.get("explicit_category"):
                 category = parsed["category"]
+                _ensure_category_in_tree(category, "")
+                add_category_alias(parsed["description"], category)
             else:
                 alias_category = match_alias_category(parsed["description"])
                 if alias_category:
@@ -2978,6 +3000,68 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             print(f"重命名分类失败: {str(e)[:100]}")
             return "❌ 重命名失败，请稍后重试"
     
+    elif parsed["type"] == "delete_by_desc":
+        try:
+            desc = parsed["description"]
+            records = get_records_by_user(openid, limit=20)
+            matched = [r for r in records if desc in r.get("description", "")]
+            if not matched:
+                return f"❌ 没找到包含「{desc}」的记录"
+            record = matched[0]
+            archive_deleted_record(record, deleted_by=openid)
+            result = delete_record(record["id"])
+            if not getattr(result, "data", []):
+                return "❌ 删除失败，可能没有权限（请检查 RLS 策略）"
+            dt = to_local_datetime(record["created_at"])
+            return f"✅ 已删除：{dt.strftime('%m-%d %H:%M')} {record['description']} {float(record['amount']):.2f}元 [{record['category']}]"
+        except Exception as e:
+            print(f"按描述删除失败: {str(e)[:100]}")
+            return "❌ 删除失败，请稍后重试"
+
+    elif parsed["type"] == "reclassify_by_desc":
+        try:
+            desc = parsed["description"]
+            records = get_records_by_user(openid, limit=50)
+            matched = [r for r in records if desc in r.get("description", "")]
+            if not matched:
+                return f"❌ 没找到包含「{desc}」的记录"
+            new_category = ai_smart_classify(desc)
+            if not new_category:
+                return f"❌ AI 无法为「{desc}」确定新分类，请手动指定：纠错 {desc} 分类名"
+            updated = 0
+            for record in matched:
+                if record["category"] != new_category:
+                    update_record(record["id"], float(record["amount"]), new_category, record["description"])
+                    updated += 1
+            add_category_alias(desc, new_category)
+            if updated == 0:
+                return f"📂 「{desc}」已经在分类「{new_category}」中，无需变更"
+            return f"✅ 已将「{desc}」的 {updated} 条记录重新归类到「{new_category}」"
+        except Exception as e:
+            print(f"重新归类失败: {str(e)[:100]}")
+            return "❌ 重新归类失败，请稍后重试"
+
+    elif parsed["type"] == "create_group_move":
+        try:
+            group = parsed["group"]
+            desc = parsed["description"]
+            _ensure_category_in_tree(group, "")
+            if not desc:
+                return f"✅ 已新建分组「{group}」\n\n💡 可以发送「纠错 凉皮 {group}」将关键词归到此分组"
+            records = get_records_by_user(openid, limit=50)
+            matched = [r for r in records if desc in r.get("description", "")]
+            if not matched:
+                return f"✅ 已新建分组「{group}」\n❌ 但没找到包含「{desc}」的记录可移动"
+            moved = 0
+            for record in matched:
+                update_record(record["id"], float(record["amount"]), group, record["description"])
+                moved += 1
+            add_category_alias(desc, group)
+            return f"✅ 已新建分组「{group}」并将「{desc}」的 {moved} 条记录移入"
+        except Exception as e:
+            print(f"新建分组移动失败: {str(e)[:100]}")
+            return "❌ 操作失败，请稍后重试"
+
     else:
         return "🤔 没理解你的意思\n\n发送「帮助」查看使用说明"
 
