@@ -894,6 +894,183 @@ def _call_deepseek(prompt: str, max_tokens: int = 60) -> str:
     return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
 
+def ai_parse_intent(user_msg: str, recent_records_text: str = "") -> dict:
+    """当正则匹配不到时，用 AI 理解用户自然语言意图。
+    返回 dict: {"action": "record|delete|reclassify|create_group|query|unknown", ...params}
+    """
+    if not DEEPSEEK_API_KEY:
+        return {"action": "unknown"}
+    
+    prompt = f"""你是一个记账机器人的意图识别器。用户发了一条消息，请判断他的意图并提取参数。
+
+用户最近的记录（供参考）：
+{recent_records_text or '无'}
+
+用户消息："{user_msg}"
+
+请严格按以下JSON格式回复（不要多余文字）：
+
+1. 记账：{{"action":"record","description":"物品描述","amount":数字,"category":"分类名(可选,没有就留空)"}}
+2. 删除记录：{{"action":"delete","description":"要删除的记录描述关键词"}}
+3. 重新归类：{{"action":"reclassify","description":"要归类的记录描述","category":"目标分类(可选)"}}
+4. 新建分组并移动：{{"action":"create_group","group":"分组名","description":"要移动的记录描述(可选)"}}
+5. 查询统计：{{"action":"query","period":"today/yesterday/week/month/7days"}}
+6. 查看明细：{{"action":"detail","period":"today/yesterday"}}
+7. 无法识别：{{"action":"unknown","reply":"简短友好的回复"}}
+
+注意：
+- 如果用户在聊天/闲聊，action设为unknown并给一个友好回复
+- 金额必须是数字，如果用户没说金额但明显在记账，amount设为0
+- 分类留空让系统自动AI分类"""
+
+    try:
+        result = _call_deepseek(prompt, max_tokens=200)
+        result = result.strip()
+        if result.startswith("```"):
+            result = result.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        import json
+        return json.loads(result)
+    except Exception as e:
+        print(f"AI意图识别失败: {str(e)[:100]}")
+        return {"action": "unknown"}
+
+
+def handle_ai_intent(openid: str, nickname: str, content: str) -> str:
+    """用 AI 理解自然语言并执行对应操作"""
+    records = get_records_by_user(openid, limit=5)
+    recent_text = ""
+    if records:
+        lines = []
+        for r in records:
+            lines.append(f"{r['description']} {float(r['amount']):.0f}元 [{r['category']}]")
+        recent_text = "\n".join(lines)
+
+    intent = ai_parse_intent(content, recent_text)
+    action = intent.get("action", "unknown")
+
+    if action == "record":
+        amount = intent.get("amount", 0)
+        desc = intent.get("description", "").strip()
+        category = intent.get("category", "").strip()
+        if not desc:
+            return "🤔 没听清你要记什么，能再说一次吗？比如「午饭 25」"
+        if not amount or amount <= 0:
+            return f"💰 「{desc}」要记多少钱？直接发金额就行，比如「{desc} 15」"
+        if not category:
+            alias_category = match_alias_category(desc)
+            if alias_category:
+                category = alias_category
+            else:
+                ai_cat = ai_smart_classify(desc)
+                category = ai_cat if ai_cat else "其他"
+                add_category_alias(desc, category)
+        else:
+            _ensure_category_in_tree(category, "")
+            add_category_alias(desc, category)
+        add_record(openid=openid, nickname=nickname, amount=amount, category=category, description=desc)
+        return f"✅ 记账成功！\n{desc}：{amount:.2f} 元\n分类：{category}（AI理解）"
+
+    elif action == "delete":
+        desc = intent.get("description", "").strip()
+        if not desc:
+            return "🤔 要删哪条记录？说具体点，比如「把凉皮那条删了」"
+        matched = [r for r in records if desc in r.get("description", "")]
+        if not matched:
+            all_records = get_records_by_user(openid, limit=30)
+            matched = [r for r in all_records if desc in r.get("description", "")]
+        if not matched:
+            return f"❌ 没找到包含「{desc}」的记录"
+        record = matched[0]
+        archive_deleted_record(record, deleted_by=openid)
+        result = delete_record(record["id"])
+        if not getattr(result, "data", []):
+            return "❌ 删除失败"
+        return f"✅ 已删除：{record['description']} {float(record['amount']):.2f}元 [{record['category']}]"
+
+    elif action == "reclassify":
+        desc = intent.get("description", "").strip()
+        target_cat = intent.get("category", "").strip()
+        if not desc:
+            return "🤔 要重新归类哪条记录？"
+        all_records = get_records_by_user(openid, limit=50)
+        matched = [r for r in all_records if desc in r.get("description", "")]
+        if not matched:
+            return f"❌ 没找到包含「{desc}」的记录"
+        if target_cat:
+            new_category = target_cat
+            _ensure_category_in_tree(new_category, "")
+        else:
+            new_category = ai_smart_classify(desc)
+            if not new_category:
+                return f"❌ AI 无法为「{desc}」确定新分类，试试：纠错 {desc} 分类名"
+        updated = 0
+        for record in matched:
+            if record["category"] != new_category:
+                update_record(record["id"], float(record["amount"]), new_category, record["description"])
+                updated += 1
+        add_category_alias(desc, new_category)
+        if updated == 0:
+            return f"📂 「{desc}」已经在「{new_category}」中了"
+        return f"✅ 已将「{desc}」的 {updated} 条记录归类到「{new_category}」"
+
+    elif action == "create_group":
+        group = intent.get("group", "").strip()
+        desc = intent.get("description", "").strip()
+        if not group:
+            return "🤔 要新建什么分组？"
+        _ensure_category_in_tree(group, "")
+        if not desc:
+            return f"✅ 已新建分组「{group}」"
+        all_records = get_records_by_user(openid, limit=50)
+        matched = [r for r in all_records if desc in r.get("description", "")]
+        if not matched:
+            return f"✅ 已新建分组「{group}」\n（没找到「{desc}」的记录可移动）"
+        moved = 0
+        for record in matched:
+            update_record(record["id"], float(record["amount"]), group, record["description"])
+            moved += 1
+        add_category_alias(desc, group)
+        return f"✅ 已新建分组「{group}」并将「{desc}」的 {moved} 条记录移入"
+
+    elif action == "query":
+        period = intent.get("period", "today")
+        period_map = {"today": "today", "yesterday": "yesterday", "week": "week", "month": "month", "7days": "7days"}
+        p = period_map.get(period, "today")
+        try:
+            start_date, end_date = get_date_range(p)
+            period_names = {"today": "今日", "yesterday": "昨日", "week": "本周", "month": "本月", "7days": "近7天"}
+            stats = get_statistics(start_date, end_date)
+            return format_statistics(stats, period_names.get(p, ""), start_date, end_date)
+        except Exception:
+            return "❌ 查询失败，请稍后重试"
+
+    elif action == "detail":
+        period = intent.get("period", "today")
+        p = "today" if period in ["today", "今天", "今日"] else "yesterday"
+        try:
+            start_date, end_date = get_date_range(p)
+            records_list = get_records(start_date=start_date - timedelta(days=1), end_date=end_date + timedelta(days=1), limit=50)
+            records_list = filter_records_by_local_range(records_list, start_date, end_date)
+            if not records_list:
+                return "📝 该时段暂无记录"
+            lines = [f"📝 {'今日' if p == 'today' else '昨日'}明细："]
+            total = 0
+            for i, r in enumerate(records_list, 1):
+                dt = to_local_datetime(r["created_at"])
+                lines.append(f"{i}) {dt.strftime('%H:%M')} {r['description']} {float(r['amount']):.2f}元 [{r['category']}]")
+                total += float(r["amount"])
+            lines.append(f"\n💰 合计：{total:.2f} 元")
+            return "\n".join(lines)
+        except Exception:
+            return "❌ 查询失败，请稍后重试"
+
+    else:
+        reply = intent.get("reply", "")
+        if reply:
+            return reply
+        return "🤔 没理解你的意思\n\n发送「帮助」查看使用说明"
+
+
 def ai_smart_classify(description: str) -> str:
     """智能 AI 分类：查库 → AI推断归到最近的分类 → 新建分类。
     返回最终分类名（二级路径格式如 '餐饮|买菜'），或空字符串表示失败。
@@ -3063,7 +3240,7 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
             return "❌ 操作失败，请稍后重试"
 
     else:
-        return "🤔 没理解你的意思\n\n发送「帮助」查看使用说明"
+        return handle_ai_intent(openid, nickname, content)
 
 
 # ============ 微信公众号验证 ============
