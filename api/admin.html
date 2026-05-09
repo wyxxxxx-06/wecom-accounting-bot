@@ -505,6 +505,31 @@
             margin-bottom: 5px;
             font-size: 13px;
         }
+        .import-tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            font-size: 14px;
+            color: #666;
+            border: none;
+            background: none;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.2s;
+            font-weight: 500;
+        }
+        .import-tab.active { color: #667eea; border-bottom-color: #667eea; font-weight: 600; }
+        .import-tab:hover { color: #764ba2; }
+        .import-tab-content { display: none; }
+        .import-tab-content.active { display: block; }
+        #qeBody td { padding: 6px 4px; border-bottom: 1px solid #f0f0f0; }
+        #qeBody td input, #qeBody td select {
+            width: 100%; padding: 6px 8px; border: 1px solid #ddd;
+            border-radius: 4px; font-size: 13px; outline: none; transition: border-color 0.2s;
+        }
+        #qeBody td input:focus { border-color: #667eea; }
+        #qeBody td input[type="number"] { width: 80px; }
+        #qeBody td input[type="date"] { width: 130px; }
+        #qeBody td input[type="time"] { width: 90px; }
         .modal {
             display: none;
             position: fixed;
@@ -1121,43 +1146,99 @@
             <!-- 批量导入 -->
             <div class="section" id="import">
                 <div class="upload-section">
-                    <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
-                        <div class="upload-icon">📁</div>
-                        <div class="upload-text">点击选择文件或拖拽到此处</div>
-                        <div class="upload-hint">支持 .xlsx 格式的 Excel 文件</div>
-                        <div class="file-name" id="fileName"></div>
+                    <div class="import-tabs" style="display:flex; border-bottom:2px solid #eee; margin-bottom:25px; gap:5px;">
+                        <button class="import-tab active" onclick="switchImportTab('quick_entry')">✏️ 快速补录</button>
+                        <button class="import-tab" onclick="switchImportTab('csv_import')">📄 导入账单CSV</button>
+                        <button class="import-tab" onclick="switchImportTab('excel_edit')">📁 Excel批量修改</button>
                     </div>
-                    <input type="file" id="fileInput" accept=".xlsx" style="display: none;" onchange="handleFileSelect(event)">
-                    <button class="btn" onclick="document.getElementById('fileInput').click()" style="width: 100%;">选择文件</button>
-                    
-                    <div class="guide-box">
-                        <h4>历史记录：导出 → 修改 → 上传</h4>
-                        <ol class="guide-steps">
-                            <li><strong>导出</strong>：在「记录」页设置好日期、分类筛选后，点「导出Excel」，得到当前筛选结果的 Excel（含 ID、日期、时间、描述、金额、分类）</li>
-                            <li><strong>修改</strong>：在 Excel 的「明细」表中修改需要改的列（<b>不要改或删 ID 列</b>）：
-                                <ul style="margin-top: 8px; margin-left: 20px;">
-                                    <li>日期（格式：2026-01-15）</li>
-                                    <li>时间（格式：14:30）</li>
-                                    <li>描述、金额、分类（可改为新分类名，系统会自动识别）</li>
-                                </ul>
-                            </li>
-                            <li><strong>上传</strong>：修改完成后，在上方选择文件或拖拽到上传区域，系统按 ID 批量更新对应记录</li>
-                        </ol>
+
+                    <!-- 快速补录 -->
+                    <div class="import-tab-content active" id="importTab-quick_entry">
+                        <div style="display:flex; gap:10px; margin-bottom:15px; flex-wrap:wrap; align-items:center;">
+                            <button class="btn" onclick="qeAddRow()" style="width:auto; padding:10px 16px;">+ 添加一行</button>
+                            <button class="btn" onclick="qeAddRows(5)" style="width:auto; padding:10px 16px;">+ 添加5行</button>
+                            <button class="btn" onclick="qeFillDate('today')" style="width:auto; padding:10px 16px;">今天日期</button>
+                            <button class="btn" onclick="qeFillDate('yesterday')" style="width:auto; padding:10px 16px;">昨天日期</button>
+                            <button class="btn" onclick="qeSubmit()" id="qeSubmitBtn" style="width:auto; padding:10px 20px; background:linear-gradient(135deg,#667eea,#764ba2); color:white;">提交记录</button>
+                        </div>
+                        <div style="overflow-x:auto;">
+                            <table style="width:100%; border-collapse:collapse; font-size:14px;">
+                                <thead>
+                                    <tr style="background:#f8f9fa;">
+                                        <th style="padding:10px 8px; text-align:left; font-weight:600; color:#555; border-bottom:2px solid #eee;">日期</th>
+                                        <th style="padding:10px 8px; text-align:left; font-weight:600; color:#555; border-bottom:2px solid #eee;">时间</th>
+                                        <th style="padding:10px 8px; text-align:left; font-weight:600; color:#555; border-bottom:2px solid #eee;">描述</th>
+                                        <th style="padding:10px 8px; text-align:left; font-weight:600; color:#555; border-bottom:2px solid #eee;">金额</th>
+                                        <th style="padding:10px 8px; text-align:left; font-weight:600; color:#555; border-bottom:2px solid #eee;">分类（可留空自动识别）</th>
+                                        <th style="padding:10px 8px; border-bottom:2px solid #eee;"></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="qeBody"></tbody>
+                            </table>
+                        </div>
+                        <div id="qeResult" style="margin-top:15px;"></div>
                     </div>
-                    
-                    <div class="tips-box">
-                        <h5>⚠️ 注意事项</h5>
-                        <ul>
-                            <li>不要删除或修改 ID 列，否则无法匹配记录</li>
-                            <li>不能新增或删除记录行，只能修改现有记录</li>
-                            <li>日期格式必须为：YYYY-MM-DD（如：2026-01-15）</li>
-                            <li>时间格式必须为：HH:MM（如：14:30）</li>
-                            <li>金额必须是数字，支持小数（如：35.50）</li>
-                            <li>分类可以输入新名称，系统会自动创建新分类</li>
-                        </ul>
+
+                    <!-- CSV导入 -->
+                    <div class="import-tab-content" id="importTab-csv_import">
+                        <div class="upload-area" id="csvUploadArea2" onclick="document.getElementById('csvFileInput2').click()" style="padding:40px 20px; margin-bottom:20px;">
+                            <div class="upload-icon" style="font-size:48px;">📄</div>
+                            <div class="upload-text">点击选择 CSV 文件或拖拽到此处</div>
+                            <div class="upload-hint">支持微信支付账单、支付宝账单</div>
+                        </div>
+                        <input type="file" id="csvFileInput2" accept=".csv" style="display:none;" onchange="handleCsvFile2(event)">
+                        <div id="csvFileName2" style="color:#667eea; font-weight:600; margin-bottom:10px;"></div>
+                        <div id="csvPreviewArea2" style="display:none;">
+                            <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px; font-size:13px; color:#666;">
+                                <label><input type="checkbox" id="csvSelectAll2" checked onchange="csvToggleAll2()"> 全选</label>
+                                <span id="csvCount2"></span>
+                            </div>
+                            <button class="btn" onclick="csvConfirmImport2()" id="csvImportBtn2" style="width:auto; padding:10px 20px; background:#2ed573; color:white; margin-bottom:15px;">确认导入选中记录</button>
+                            <div style="max-height:400px; overflow-y:auto;" id="csvPreview2"></div>
+                        </div>
+                        <div id="csvResult2" style="margin-top:15px;"></div>
                     </div>
-                    
-                    <div id="uploadResult"></div>
+
+                    <!-- Excel批量修改 -->
+                    <div class="import-tab-content" id="importTab-excel_edit">
+                        <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
+                            <div class="upload-icon">📁</div>
+                            <div class="upload-text">点击选择文件或拖拽到此处</div>
+                            <div class="upload-hint">支持 .xlsx 格式的 Excel 文件</div>
+                            <div class="file-name" id="fileName"></div>
+                        </div>
+                        <input type="file" id="fileInput" accept=".xlsx" style="display: none;" onchange="handleFileSelect(event)">
+                        <button class="btn" onclick="document.getElementById('fileInput').click()" style="width: 100%;">选择文件</button>
+                        
+                        <div class="guide-box">
+                            <h4>历史记录：导出 → 修改 → 上传</h4>
+                            <ol class="guide-steps">
+                                <li><strong>导出</strong>：在「记录」页设置好日期、分类筛选后，点「导出Excel」，得到当前筛选结果的 Excel（含 ID、日期、时间、描述、金额、分类）</li>
+                                <li><strong>修改</strong>：在 Excel 的「明细」表中修改需要改的列（<b>不要改或删 ID 列</b>）：
+                                    <ul style="margin-top: 8px; margin-left: 20px;">
+                                        <li>日期（格式：2026-01-15）</li>
+                                        <li>时间（格式：14:30）</li>
+                                        <li>描述、金额、分类（可改为新分类名，系统会自动识别）</li>
+                                    </ul>
+                                </li>
+                                <li><strong>上传</strong>：修改完成后，在上方选择文件或拖拽到上传区域，系统按 ID 批量更新对应记录</li>
+                            </ol>
+                        </div>
+                        
+                        <div class="tips-box">
+                            <h5>⚠️ 注意事项</h5>
+                            <ul>
+                                <li>不要删除或修改 ID 列，否则无法匹配记录</li>
+                                <li>不能新增或删除记录行，只能修改现有记录</li>
+                                <li>日期格式必须为：YYYY-MM-DD（如：2026-01-15）</li>
+                                <li>时间格式必须为：HH:MM（如：14:30）</li>
+                                <li>金额必须是数字，支持小数（如：35.50）</li>
+                                <li>分类可以输入新名称，系统会自动创建新分类</li>
+                            </ul>
+                        </div>
+                        
+                        <div id="uploadResult"></div>
+                    </div>
                 </div>
             </div>
 
@@ -1467,6 +1548,7 @@
             else if (section === 'records') loadRecords();
             else if (section === 'table_stats') setTimeout(function() { loadMonthlyStats(0, true); }, 0);
             else if (section === 'stats') loadStats();
+            else if (section === 'import') { qeLoadCategories(); if (document.getElementById('qeBody').children.length === 0) qeAddRows(5); }
             else if (section === 'categories') loadCategories();
             else if (section === 'debts') loadDebts();
             else if (section === 'settings') loadSettings();
@@ -2556,6 +2638,222 @@
                     doneLoading(false);
                 }
             }
+        }
+
+        // === 导入页 子Tab切换 ===
+        function switchImportTab(tab) {
+            document.querySelectorAll('.import-tab').forEach((t, i) => {
+                t.classList.toggle('active', t.textContent.includes(
+                    tab === 'quick_entry' ? '快速补录' : tab === 'csv_import' ? 'CSV' : 'Excel'
+                ));
+            });
+            document.querySelectorAll('.import-tab-content').forEach(c => c.classList.remove('active'));
+            const el = document.getElementById('importTab-' + tab);
+            if (el) el.classList.add('active');
+            if (tab === 'quick_entry' && document.getElementById('qeBody').children.length === 0) {
+                qeAddRows(5);
+            }
+        }
+
+        // === 快速补录 ===
+        let qeCategories = [];
+        async function qeLoadCategories() {
+            try {
+                const res = await fetchWithAuth('/api/admin/categories');
+                const data = await res.json();
+                if (data.success) qeCategories = data.categories.map(c => c.category);
+            } catch(e) {}
+        }
+
+        function qeCreateRow(date, time, desc, amount, category) {
+            const tr = document.createElement('tr');
+            const catOptions = qeCategories.map(c => `<option value="${c}">${c}</option>`).join('');
+            tr.innerHTML = `
+                <td><input type="date" value="${date||''}"></td>
+                <td><input type="time" value="${time||'12:00'}"></td>
+                <td><input type="text" placeholder="描述" value="${desc||''}"></td>
+                <td><input type="number" step="0.01" min="0" placeholder="金额" value="${amount||''}"></td>
+                <td><input type="text" list="qeCatList" placeholder="留空自动识别" value="${category||''}">
+                    <datalist id="qeCatList">${catOptions}</datalist></td>
+                <td><button class="btn" style="padding:4px 10px; background:#ff4757; color:white; width:auto;" onclick="this.closest('tr').remove()">删</button></td>
+            `;
+            return tr;
+        }
+
+        function qeAddRow(date, time, desc, amount, category) {
+            document.getElementById('qeBody').appendChild(qeCreateRow(date, time, desc, amount, category));
+        }
+
+        function qeAddRows(n) {
+            for (let i = 0; i < n; i++) qeAddRow();
+        }
+
+        function qeFillDate(type) {
+            const d = new Date();
+            if (type === 'yesterday') d.setDate(d.getDate() - 1);
+            const dateStr = d.toISOString().split('T')[0];
+            document.querySelectorAll('#qeBody tr').forEach(tr => {
+                const dateInput = tr.querySelector('input[type="date"]');
+                if (!dateInput.value) dateInput.value = dateStr;
+            });
+        }
+
+        async function qeSubmit() {
+            const rows = document.querySelectorAll('#qeBody tr');
+            const items = [];
+            rows.forEach(tr => {
+                const inputs = tr.querySelectorAll('input');
+                const date = inputs[0].value;
+                const time = inputs[1].value;
+                const desc = inputs[2].value.trim();
+                const amount = parseFloat(inputs[3].value);
+                const category = inputs[4].value.trim();
+                if (desc && amount > 0) {
+                    items.push({date, time, description: desc, amount, category});
+                }
+            });
+            if (!items.length) {
+                document.getElementById('qeResult').innerHTML = '<div style="padding:12px; background:#f8d7da; color:#721c24; border-radius:8px;">请至少填写一条有效记录（描述+金额）</div>';
+                return;
+            }
+            const btn = document.getElementById('qeSubmitBtn');
+            btn.disabled = true; btn.textContent = '提交中...';
+            try {
+                const res = await fetchWithAuth('/api/admin/quick_entry', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({items})
+                });
+                const data = await res.json();
+                if (data.success) {
+                    document.getElementById('qeResult').innerHTML = `<div style="padding:12px; background:#d4edda; color:#155724; border-radius:8px;">${data.message}</div>`;
+                    document.getElementById('qeBody').innerHTML = '';
+                    qeAddRows(5);
+                } else {
+                    document.getElementById('qeResult').innerHTML = `<div style="padding:12px; background:#f8d7da; color:#721c24; border-radius:8px;">${data.error || '提交失败'}</div>`;
+                }
+            } catch(e) {
+                document.getElementById('qeResult').innerHTML = `<div style="padding:12px; background:#f8d7da; color:#721c24; border-radius:8px;">网络错误: ${e.message}</div>`;
+            }
+            btn.disabled = false; btn.textContent = '提交记录';
+        }
+
+        // === CSV 导入 ===
+        let csvRecords2 = [];
+
+        (function() {
+            const area = document.getElementById('csvUploadArea2');
+            if (!area) return;
+            area.addEventListener('dragover', e => { e.preventDefault(); area.style.borderColor = '#764ba2'; });
+            area.addEventListener('dragleave', () => { area.style.borderColor = '#667eea'; });
+            area.addEventListener('drop', e => {
+                e.preventDefault();
+                area.style.borderColor = '#667eea';
+                if (e.dataTransfer.files[0]) csvUpload2(e.dataTransfer.files[0]);
+            });
+        })();
+
+        function handleCsvFile2(e) {
+            if (e.target.files[0]) csvUpload2(e.target.files[0]);
+        }
+
+        async function csvUpload2(file) {
+            if (!file.name.endsWith('.csv')) {
+                document.getElementById('csvResult2').innerHTML = '<div style="padding:12px; background:#f8d7da; color:#721c24; border-radius:8px;">请上传 .csv 格式文件</div>';
+                return;
+            }
+            document.getElementById('csvFileName2').textContent = '已选择: ' + file.name;
+            const formData = new FormData();
+            formData.append('file', file);
+            try {
+                const res = await fetchWithAuth('/api/admin/import_csv', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                if (data.success && data.records && data.records.length > 0) {
+                    csvRecords2 = data.records;
+                    csvRenderPreview2();
+                    document.getElementById('csvPreviewArea2').style.display = 'block';
+                    document.getElementById('csvCount2').textContent = `共 ${data.total} 条支出记录`;
+                    document.getElementById('csvResult2').innerHTML = `<div style="padding:12px; background:#d4edda; color:#155724; border-radius:8px;">${data.message}</div>`;
+                } else {
+                    document.getElementById('csvResult2').innerHTML = `<div style="padding:12px; background:#f8d7da; color:#721c24; border-radius:8px;">${data.error || '未识别到有效记录'}</div>`;
+                }
+            } catch(e) {
+                document.getElementById('csvResult2').innerHTML = `<div style="padding:12px; background:#f8d7da; color:#721c24; border-radius:8px;">上传失败: ${e.message}</div>`;
+            }
+        }
+
+        function csvRenderPreview2() {
+            const catOptions = qeCategories.map(c => `<option value="${c}">${c}</option>`).join('');
+            let html = `<table style="width:100%; border-collapse:collapse; font-size:13px;"><thead><tr style="background:#f8f9fa;">
+                <th style="padding:8px; width:30px; text-align:center;"><input type="checkbox" checked onchange="csvToggleAll2()"></th>
+                <th style="padding:8px; text-align:left;">日期</th><th style="padding:8px; text-align:left;">描述</th>
+                <th style="padding:8px; text-align:left;">金额</th><th style="padding:8px; text-align:left;">分类</th>
+            </tr></thead><tbody>`;
+            csvRecords2.forEach((r, i) => {
+                const desc = (r.description||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+                const cat = (r.category||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+                html += `<tr data-idx="${i}">
+                    <td style="padding:6px; text-align:center;"><input type="checkbox" class="csv-check2" checked></td>
+                    <td style="padding:6px;">${r.date || ''}</td>
+                    <td style="padding:6px;"><input type="text" value="${desc}" class="csv-desc2" style="width:100%; padding:4px 6px; border:1px solid #ddd; border-radius:4px; font-size:12px;"></td>
+                    <td style="padding:6px; font-weight:600; color:#e74c3c;">${r.amount.toFixed(2)}</td>
+                    <td style="padding:6px;"><input type="text" list="csvCatList2" value="${cat}" class="csv-cat2" placeholder="留空归其他" style="width:100%; padding:4px 6px; border:1px solid #ddd; border-radius:4px; font-size:12px;">
+                        <datalist id="csvCatList2">${catOptions}</datalist></td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+            document.getElementById('csvPreview2').innerHTML = html;
+        }
+
+        function csvToggleAll2() {
+            const checked = document.getElementById('csvSelectAll2').checked;
+            document.querySelectorAll('.csv-check2').forEach(cb => cb.checked = checked);
+        }
+
+        async function csvConfirmImport2() {
+            const rows = document.querySelectorAll('#csvPreview2 tbody tr');
+            const items = [];
+            rows.forEach((tr, i) => {
+                const cb = tr.querySelector('.csv-check2');
+                if (!cb || !cb.checked) return;
+                const desc = tr.querySelector('.csv-desc2').value.trim();
+                const cat = tr.querySelector('.csv-cat2').value.trim();
+                const r = csvRecords2[i];
+                items.push({
+                    description: desc || r.description,
+                    amount: r.amount,
+                    category: cat || r.category || '',
+                    date: r.date || '',
+                    time: r.time || '12:00'
+                });
+            });
+            if (!items.length) {
+                document.getElementById('csvResult2').innerHTML = '<div style="padding:12px; background:#f8d7da; color:#721c24; border-radius:8px;">请至少选择一条记录</div>';
+                return;
+            }
+            const btn = document.getElementById('csvImportBtn2');
+            btn.disabled = true; btn.textContent = '导入中...';
+            try {
+                const res = await fetchWithAuth('/api/admin/confirm_csv_import', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({items})
+                });
+                const data = await res.json();
+                if (data.success) {
+                    document.getElementById('csvResult2').innerHTML = `<div style="padding:12px; background:#d4edda; color:#155724; border-radius:8px;">${data.message}</div>`;
+                    document.getElementById('csvPreviewArea2').style.display = 'none';
+                    csvRecords2 = [];
+                } else {
+                    document.getElementById('csvResult2').innerHTML = `<div style="padding:12px; background:#f8d7da; color:#721c24; border-radius:8px;">${data.error || '导入失败'}</div>`;
+                }
+            } catch(e) {
+                document.getElementById('csvResult2').innerHTML = `<div style="padding:12px; background:#f8d7da; color:#721c24; border-radius:8px;">网络错误: ${e.message}</div>`;
+            }
+            btn.disabled = false; btn.textContent = '确认导入选中记录';
         }
 
         // 文件选择
