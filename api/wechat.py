@@ -2592,9 +2592,15 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
         else:
             return build_category_pick_prompt(pending_pick["description"], pending_pick["amount"], pending_pick["categories"])
 
-    # 批量补记 / 批量记账：支持每行带日期前缀
-    # 格式：补记\n5/5 早餐 8\n5/5 午餐 25\n5/6 咖啡 15
-    # 或：批量\n早餐 8;午餐 25;打车 30
+    # 批量补记 / 批量记账
+    # 支持格式1：补记\n5/5 早餐 8\n5/5 午餐 25
+    # 支持格式2：批量\n早餐 8;午餐 25;打车 30
+    # 支持格式3（日期分组）：
+    #   5.1
+    #   1688先采后付	98.26
+    #   保险	12.5
+    #   5.2
+    #   小白修车	45
     is_batch_backfill = content.startswith("补记") and ("\n" in content or "；" in content or ";" in content)
     is_batch = "批量" in content or "\n" in content or "；" in content or ";" in content
 
@@ -2609,38 +2615,78 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
         if len(lines) >= 2:
             success = 0
             failed = []
-            categories_for_ai = get_category_candidates()
             current_date = None
+
+            def _try_parse_date_only(line_text: str):
+                """尝试解析纯日期行，如 5.1、5/1、5-1、05.01、5月1日、2026.5.1"""
+                m = re.match(r'^(?:(\d{4})[./\-年])?\s*(\d{1,2})[./\-月]\s*(\d{1,2})[日号]?\s*$', line_text)
+                if m:
+                    year_str, month_str, day_str = m.groups()
+                    now = datetime.now(LOCAL_TZ)
+                    year = int(year_str) if year_str else now.year
+                    month = int(month_str)
+                    day = int(day_str)
+                    dt = datetime(year, month, day, 12, 0, 0, tzinfo=LOCAL_TZ)
+                    if dt > now:
+                        dt = dt.replace(year=year - 1)
+                    return dt
+                return None
+
+            def _try_parse_date_prefix(line_text: str):
+                """尝试解析行首日期+内容，如 5/5 早餐 8"""
+                m = re.match(
+                    r'^(?:(\d{4})[./\-年])?\s*(\d{1,2})[./\-月]\s*(\d{1,2})[日号]?\s+(.+)$',
+                    line_text
+                )
+                if m:
+                    year_str, month_str, day_str, rest = m.groups()
+                    now = datetime.now(LOCAL_TZ)
+                    year = int(year_str) if year_str else now.year
+                    month = int(month_str)
+                    day = int(day_str)
+                    dt = datetime(year, month, day, 12, 0, 0, tzinfo=LOCAL_TZ)
+                    if dt > now:
+                        dt = dt.replace(year=year - 1)
+                    return dt, rest.strip()
+                return None, None
+
+            def _parse_tab_record(line_text: str) -> dict:
+                """解析 tab 分隔的记录行，如 '1688先采后付\t98.26'"""
+                if "\t" in line_text:
+                    parts = line_text.split("\t")
+                    if len(parts) >= 2:
+                        desc = parts[0].strip()
+                        amount_str = parts[-1].strip()
+                        try:
+                            amount = float(amount_str)
+                            if desc and amount > 0:
+                                return {"type": "record", "amount": amount, "description": desc, "category": desc, "explicit_category": False}
+                        except ValueError:
+                            pass
+                return {"type": "unknown"}
 
             for line in lines:
                 record_date = None
                 record_text = line
 
-                # 尝试解析行首日期：5/5、5-5、05-05、5月5日、2026-05-05、2026/5/5
-                date_line_match = re.match(
-                    r'^(?:(\d{4})[/\-年])?\s*(\d{1,2})[/\-月]\s*(\d{1,2})[日号]?\s+(.+)$',
-                    line
-                )
-                if date_line_match:
-                    year_str, month_str, day_str, rest = date_line_match.groups()
-                    try:
-                        now = datetime.now(LOCAL_TZ)
-                        year = int(year_str) if year_str else now.year
-                        month = int(month_str)
-                        day = int(day_str)
-                        record_date = datetime(year, month, day, 12, 0, 0, tzinfo=LOCAL_TZ)
-                        if record_date > now:
-                            record_date = record_date.replace(year=year - 1)
-                        record_text = rest.strip()
-                        current_date = record_date
-                    except (ValueError, TypeError):
-                        pass
+                date_only = _try_parse_date_only(line)
+                if date_only:
+                    current_date = date_only
+                    continue
 
-                # 如果没有日期前缀但之前有设定日期（日期分组模式）
-                if record_date is None and current_date is not None and is_batch_backfill:
+                prefix_date, prefix_rest = _try_parse_date_prefix(line)
+                if prefix_date:
+                    record_date = prefix_date
+                    current_date = prefix_date
+                    record_text = prefix_rest
+
+                if record_date is None and current_date is not None:
                     record_date = current_date
 
-                parsed_line = parse_record_text(record_text)
+                parsed_line = _parse_tab_record(record_text)
+                if parsed_line["type"] != "record":
+                    parsed_line = parse_record_text(record_text)
+
                 if parsed_line["type"] == "record":
                     try:
                         alias_category = match_alias_category(parsed_line["description"])
@@ -2664,10 +2710,13 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 else:
                     failed.append(line)
 
-            msg = f"✅ 批量记账完成：成功{success}条"
-            if failed:
-                msg += f"\n❌ 失败{len(failed)}条：\n" + "\n".join(failed[:5])
-            return msg
+            if success == 0 and failed:
+                pass
+            else:
+                msg = f"✅ 批量记账完成：成功{success}条"
+                if failed:
+                    msg += f"\n❌ 失败{len(failed)}条：\n" + "\n".join(failed[:5])
+                return msg
 
     parsed = parse_message(content)
     
