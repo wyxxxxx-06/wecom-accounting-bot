@@ -898,37 +898,70 @@ def _call_deepseek(prompt: str, max_tokens: int = 60) -> str:
     return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
 
-def ai_parse_intent(user_msg: str, recent_records_text: str = "") -> dict:
-    """当正则匹配不到时，用 AI 理解用户自然语言意图。
-    返回 dict: {"action": "record|delete|reclassify|create_group|query|unknown", ...params}
-    """
+def ai_parse_intent(user_msg: str, recent_records_text: str = "", all_categories_text: str = "") -> dict:
+    """AI 作为主大脑理解用户自然语言，返回结构化意图。"""
     if not DEEPSEEK_API_KEY:
-        return {"action": "unknown"}
+        return {"action": "unknown", "reply": "AI 服务未配置，请联系管理员"}
     
-    prompt = f"""你是一个记账机器人的意图识别器。用户发了一条消息，请判断他的意图并提取参数。
+    prompt = f"""你是一个私人记账助手。用户跟你对话来管理日常开支。请理解用户意图并返回JSON。
 
-用户最近的记录（供参考）：
-{recent_records_text or '无'}
+用户最近5条记录：
+{recent_records_text or '暂无记录'}
+
+用户已有的分类：
+{all_categories_text or '暂无分类'}
 
 用户消息："{user_msg}"
 
-请严格按以下JSON格式回复（不要多余文字）：
+请严格返回一个JSON（不要多余文字、不要markdown）：
 
-1. 记账：{{"action":"record","description":"物品描述","amount":数字,"category":"分类名(可选,没有就留空)"}}
-2. 删除记录：{{"action":"delete","description":"要删除的记录描述关键词"}}
-3. 重新归类：{{"action":"reclassify","description":"要归类的记录描述","category":"目标分类(可选)"}}
-4. 新建分组并移动：{{"action":"create_group","group":"分组名","description":"要移动的记录描述(可选)"}}
-5. 查询统计：{{"action":"query","period":"today/yesterday/week/month/7days"}}
-6. 查看明细：{{"action":"detail","period":"today/yesterday"}}
-7. 无法识别：{{"action":"unknown","reply":"简短友好的回复"}}
+【记账】用户提到花了钱/买了东西/消费：
+{{"action":"record","description":"物品描述","amount":数字,"category":"你认为最合适的分类(从已有分类中选,没有合适的就自己起一个简短的)"}}
 
-注意：
-- 如果用户在聊天/闲聊，action设为unknown并给一个友好回复
-- 金额必须是数字，如果用户没说金额但明显在记账，amount设为0
-- 分类留空让系统自动AI分类"""
+【多条记账】用户一次说了多笔消费：
+{{"action":"multi_record","items":[{{"description":"描述1","amount":数字,"category":"分类"}},{{"description":"描述2","amount":数字,"category":"分类"}}]}}
+
+【删除】用户想删掉某条记录：
+{{"action":"delete","description":"要删的记录关键词"}}
+
+【撤销】用户想撤销上一条/最近一条：
+{{"action":"undo"}}
+
+【重新归类】用户想把某个东西换个分类：
+{{"action":"reclassify","description":"记录关键词","category":"目标分类(用户指定了就填,没指定留空)"}}
+
+【新建分组】用户想创建新分类/分组：
+{{"action":"create_group","group":"分组名","description":"要移动的记录关键词(可选,没有就留空)"}}
+
+【查询统计】用户想看花了多少钱：
+{{"action":"query","period":"today/yesterday/week/month/7days/30days"}}
+
+【查看明细】用户想看具体花在哪了：
+{{"action":"detail","period":"today/yesterday/week/month"}}
+
+【查分类】用户想看某个分类的花费：
+{{"action":"query_category","category":"分类名或关键词"}}
+
+【导出】用户想导出记录：
+{{"action":"export","period":"month/week/all"}}
+
+【管理后台】用户想打开网页/后台：
+{{"action":"admin"}}
+
+【闲聊/其他】无法归类为上述任何一种：
+{{"action":"chat","reply":"用简短友好的中文回复用户，你是记账助手，可以引导用户记账"}}
+
+规则：
+- 金额必须是数字。"十五"=15，"一百"=100
+- 如果用户说了消费但没说金额，amount设为0
+- 分类要简短（2-4个字），从已有分类中选最合适的，没有就新建
+- "凉皮10"="凉皮 10元"，理解为记账
+- "今天花了多少"=查询today
+- "删了/删掉/不要了"=删除
+- "算了撤回"=撤销"""
 
     try:
-        result = _call_deepseek(prompt, max_tokens=200)
+        result = _call_deepseek(prompt, max_tokens=300)
         result = result.strip()
         if result.startswith("```"):
             result = result.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
@@ -936,76 +969,108 @@ def ai_parse_intent(user_msg: str, recent_records_text: str = "") -> dict:
         return json.loads(result)
     except Exception as e:
         print(f"AI意图识别失败: {str(e)[:100]}")
-        return {"action": "unknown"}
+        return {"action": "unknown", "reply": ""}
 
 
 def handle_ai_intent(openid: str, nickname: str, content: str) -> str:
-    """用 AI 理解自然语言并执行对应操作"""
+    """AI 作为主大脑，理解用户自然语言并执行对应操作"""
     records = get_records_by_user(openid, limit=5)
     recent_text = ""
     if records:
         lines = []
         for r in records:
-            lines.append(f"{r['description']} {float(r['amount']):.0f}元 [{r['category']}]")
+            dt = to_local_datetime(r["created_at"])
+            lines.append(f"{dt.strftime('%m-%d %H:%M')} {r['description']} {float(r['amount']):.0f}元 [{r['category']}]")
         recent_text = "\n".join(lines)
 
-    intent = ai_parse_intent(content, recent_text)
-    action = intent.get("action", "unknown")
+    all_cats = get_all_categories()
+    cats_text = "、".join(all_cats[:20]) if all_cats else ""
+
+    intent = ai_parse_intent(content, recent_text, cats_text)
+    action = intent.get("action", "chat")
 
     if action == "record":
         amount = intent.get("amount", 0)
         desc = intent.get("description", "").strip()
         category = intent.get("category", "").strip()
         if not desc:
-            return "🤔 没听清你要记什么，能再说一次吗？比如「午饭 25」"
+            return "没听清你要记什么，能再说一次吗？"
         if not amount or amount <= 0:
-            return f"💰 「{desc}」要记多少钱？直接发金额就行，比如「{desc} 15」"
-        if not category:
-            alias_category = match_alias_category(desc)
-            if alias_category:
-                category = alias_category
-            else:
-                ai_cat = ai_smart_classify(desc)
-                category = ai_cat if ai_cat else "其他"
-                add_category_alias(desc, category)
-        else:
+            return f"「{desc}」花了多少钱？"
+        if category:
             _ensure_category_in_tree(category, "")
-            add_category_alias(desc, category)
+        else:
+            alias_category = match_alias_category(desc)
+            category = alias_category if alias_category else "其他"
+        add_category_alias(desc, category)
         add_record(openid=openid, nickname=nickname, amount=amount, category=category, description=desc)
-        return f"✅ 记账成功！\n{desc}：{amount:.2f} 元\n分类：{category}（AI理解）"
+        return f"✅ 记好了\n{desc}：{amount:.2f} 元\n分类：{category}"
+
+    elif action == "multi_record":
+        items = intent.get("items", [])
+        if not items:
+            return "没听清你要记什么，能再说一次吗？"
+        success = 0
+        results = []
+        for item in items:
+            desc = item.get("description", "").strip()
+            amount = item.get("amount", 0)
+            category = item.get("category", "").strip()
+            if not desc or not amount or amount <= 0:
+                continue
+            if category:
+                _ensure_category_in_tree(category, "")
+            else:
+                alias_category = match_alias_category(desc)
+                category = alias_category if alias_category else "其他"
+            add_category_alias(desc, category)
+            add_record(openid=openid, nickname=nickname, amount=amount, category=category, description=desc)
+            results.append(f"{desc} {amount:.2f}元 → {category}")
+            success += 1
+        if success == 0:
+            return "没有识别到有效的记账信息，能再说一次吗？"
+        msg = f"✅ 记好了 {success} 笔：\n" + "\n".join(results)
+        return msg
 
     elif action == "delete":
         desc = intent.get("description", "").strip()
         if not desc:
-            return "🤔 要删哪条记录？说具体点，比如「把凉皮那条删了」"
-        matched = [r for r in records if desc in r.get("description", "")]
+            return "要删哪条？说个关键词就行"
+        all_records = get_records_by_user(openid, limit=30)
+        matched = [r for r in all_records if desc in r.get("description", "")]
         if not matched:
-            all_records = get_records_by_user(openid, limit=30)
-            matched = [r for r in all_records if desc in r.get("description", "")]
-        if not matched:
-            return f"❌ 没找到包含「{desc}」的记录"
+            return f"没找到包含「{desc}」的记录"
         record = matched[0]
         archive_deleted_record(record, deleted_by=openid)
         if not delete_record(record["id"]):
-            return "❌ 删除失败"
-        return f"✅ 已删除：{record['description']} {float(record['amount']):.2f}元 [{record['category']}]"
+            return "删除失败，数据库可能有权限问题"
+        return f"✅ 已删除：{record['description']} {float(record['amount']):.2f}元"
+
+    elif action == "undo":
+        if not records:
+            return "没有可以撤销的记录"
+        record = records[0]
+        archive_deleted_record(record, deleted_by=openid)
+        if not delete_record(record["id"]):
+            return "撤销失败，数据库可能有权限问题"
+        return f"✅ 已撤销：{record['description']} {float(record['amount']):.2f}元"
 
     elif action == "reclassify":
         desc = intent.get("description", "").strip()
         target_cat = intent.get("category", "").strip()
         if not desc:
-            return "🤔 要重新归类哪条记录？"
+            return "要重新归类哪条？说个关键词"
         all_records = get_records_by_user(openid, limit=50)
         matched = [r for r in all_records if desc in r.get("description", "")]
         if not matched:
-            return f"❌ 没找到包含「{desc}」的记录"
+            return f"没找到包含「{desc}」的记录"
         if target_cat:
             new_category = target_cat
             _ensure_category_in_tree(new_category, "")
         else:
             new_category = ai_smart_classify(desc)
             if not new_category:
-                return f"❌ AI 无法为「{desc}」确定新分类，试试：纠错 {desc} 分类名"
+                return f"没法确定「{desc}」该归到哪，你想放到哪个分类？"
         updated = 0
         for record in matched:
             if record["category"] != new_category:
@@ -1013,21 +1078,21 @@ def handle_ai_intent(openid: str, nickname: str, content: str) -> str:
                 updated += 1
         add_category_alias(desc, new_category)
         if updated == 0:
-            return f"📂 「{desc}」已经在「{new_category}」中了"
-        return f"✅ 已将「{desc}」的 {updated} 条记录归类到「{new_category}」"
+            return f"「{desc}」已经在「{new_category}」里了"
+        return f"✅ 已将「{desc}」的 {updated} 条记录归到「{new_category}」"
 
     elif action == "create_group":
         group = intent.get("group", "").strip()
         desc = intent.get("description", "").strip()
         if not group:
-            return "🤔 要新建什么分组？"
+            return "要新建什么分组？"
         _ensure_category_in_tree(group, "")
         if not desc:
             return f"✅ 已新建分组「{group}」"
         all_records = get_records_by_user(openid, limit=50)
         matched = [r for r in all_records if desc in r.get("description", "")]
         if not matched:
-            return f"✅ 已新建分组「{group}」\n（没找到「{desc}」的记录可移动）"
+            return f"✅ 已新建分组「{group}」（没找到「{desc}」的记录可移动）"
         moved = 0
         for record in matched:
             update_record(record["id"], float(record["amount"]), group, record["description"])
@@ -1037,41 +1102,81 @@ def handle_ai_intent(openid: str, nickname: str, content: str) -> str:
 
     elif action == "query":
         period = intent.get("period", "today")
-        period_map = {"today": "today", "yesterday": "yesterday", "week": "week", "month": "month", "7days": "7days"}
+        period_map = {"today": "today", "yesterday": "yesterday", "week": "week", "month": "month", "7days": "7days", "30days": "30days"}
         p = period_map.get(period, "today")
         try:
             start_date, end_date = get_date_range(p)
-            period_names = {"today": "今日", "yesterday": "昨日", "week": "本周", "month": "本月", "7days": "近7天"}
+            period_names = {"today": "今日", "yesterday": "昨日", "week": "本周", "month": "本月", "7days": "近7天", "30days": "近30天"}
             stats = get_statistics(start_date, end_date)
             return format_statistics(stats, period_names.get(p, ""), start_date, end_date)
         except Exception:
-            return "❌ 查询失败，请稍后重试"
+            return "查询失败，请稍后再试"
 
     elif action == "detail":
         period = intent.get("period", "today")
-        p = "today" if period in ["today", "今天", "今日"] else "yesterday"
+        period_map_detail = {"today": "today", "yesterday": "yesterday", "week": "week", "month": "month"}
+        p = period_map_detail.get(period, "today")
         try:
             start_date, end_date = get_date_range(p)
             records_list = get_records(start_date=start_date - timedelta(days=1), end_date=end_date + timedelta(days=1), limit=50)
             records_list = filter_records_by_local_range(records_list, start_date, end_date)
             if not records_list:
-                return "📝 该时段暂无记录"
-            lines = [f"📝 {'今日' if p == 'today' else '昨日'}明细："]
+                return "这段时间没有记录"
+            period_names = {"today": "今日", "yesterday": "昨日", "week": "本周", "month": "本月"}
+            lines = [f"📝 {period_names.get(p, '')}明细："]
             total = 0
             for i, r in enumerate(records_list, 1):
                 dt = to_local_datetime(r["created_at"])
-                lines.append(f"{i}) {dt.strftime('%H:%M')} {r['description']} {float(r['amount']):.2f}元 [{r['category']}]")
+                lines.append(f"{i}) {dt.strftime('%m-%d %H:%M')} {r['description']} {float(r['amount']):.2f}元 [{r['category']}]")
                 total += float(r["amount"])
-            lines.append(f"\n💰 合计：{total:.2f} 元")
+            lines.append(f"\n合计：{total:.2f} 元")
             return "\n".join(lines)
         except Exception:
-            return "❌ 查询失败，请稍后重试"
+            return "查询失败，请稍后再试"
+
+    elif action == "query_category":
+        target_category = intent.get("category", "").strip()
+        if not target_category:
+            return "要查哪个分类？"
+        try:
+            now = datetime.now(LOCAL_TZ)
+            month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            cat_records = get_records(start_date=month_start, category=target_category)
+            cat_records = filter_records_by_local_range(cat_records, month_start, now + timedelta(days=1))
+            if not cat_records:
+                keyword_records = get_records_by_keyword(start_date=month_start, keyword=target_category)
+                keyword_records = filter_records_by_local_range(keyword_records, month_start, now + timedelta(days=1))
+                if not keyword_records:
+                    return f"本月没有「{target_category}」相关的记录"
+                cat_records = keyword_records
+            total = sum(float(r["amount"]) for r in cat_records)
+            count = len(cat_records)
+            return f"📂 本月「{target_category}」：{total:.2f} 元（{count}笔）"
+        except Exception:
+            return "查询失败，请稍后再试"
+
+    elif action == "export":
+        period = intent.get("period", "month")
+        period_map_export = {"month": "month", "week": "week", "all": "all"}
+        p = period_map_export.get(period, "month")
+        try:
+            export_link = build_export_link(openid, p)
+            if not export_link:
+                return "导出功能未配置"
+            return f"📥 导出链接（10分钟有效）：\n{export_link}"
+        except Exception:
+            return "导出失败，请稍后再试"
+
+    elif action == "admin":
+        if PUBLIC_BASE_URL:
+            return f"🌐 管理后台：\n{PUBLIC_BASE_URL}/api/admin"
+        return "管理后台未配置"
 
     else:
         reply = intent.get("reply", "")
         if reply:
             return reply
-        return "🤔 没理解你的意思\n\n发送「帮助」查看使用说明"
+        return "我是你的记账助手，告诉我你花了什么钱就行，比如「午饭 25」「打车回家 30」"
 
 
 def ai_smart_classify(description: str) -> str:
@@ -2721,575 +2826,31 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                     msg += f"\n❌ 失败{len(failed)}条：\n" + "\n".join(failed[:5])
                 return msg
 
-    parsed = parse_message(content)
-    
-    if parsed["type"] == "help":
-        return get_help_text()
-    
-    elif parsed["type"] == "admin_url":
-        if PUBLIC_BASE_URL:
-            return f"🌐 管理后台\n\n点击链接进入：\n{PUBLIC_BASE_URL}/api/admin\n\n💡 首次使用需要输入管理密码"
-        else:
-            return "❌ 管理后台链接未配置，请联系管理员设置 PUBLIC_BASE_URL"
-
-    elif parsed["type"] == "record_need_amount":
-        return f"请补金额，例如：记一笔 {parsed['category']} 15"
-    
-    elif parsed["type"] == "record":
-        try:
-            if parsed.get("explicit_category"):
-                category = parsed["category"]
-                _ensure_category_in_tree(category, "")
-                add_category_alias(parsed["description"], category)
-            else:
-                alias_category = match_alias_category(parsed["description"])
-                if alias_category:
-                    category = alias_category
-                else:
-                    ai_result = ai_smart_classify(parsed["description"])
-                    if ai_result:
-                        category = ai_result
-                        add_category_alias(parsed["description"], category)
-                        add_record(
-                            openid=openid,
-                            nickname=nickname,
-                            amount=parsed["amount"],
-                            category=category,
-                            description=parsed["description"]
-                        )
-                        return f"✅ 记账成功！\n{parsed['description']}：{parsed['amount']:.2f} 元\n分类：{category}（AI智能分类）"
-                    categories = get_category_candidates()
-                    if len(categories) <= 1:
-                        category = "其他"
-                        add_category_alias(parsed["description"], category)
-                    else:
-                        PENDING_CATEGORY_PICKS[openid] = {
-                            "ts": time.time(),
-                            "description": parsed["description"],
-                            "amount": parsed["amount"],
-                            "categories": categories
-                        }
-                        return build_category_pick_prompt(parsed["description"], parsed["amount"], categories)
-            add_record(
-                openid=openid,
-                nickname=nickname,
-                amount=parsed["amount"],
-                category=category,
-                description=parsed["description"]
-            )
-            return f"✅ 记账成功！\n{parsed['description']}：{parsed['amount']:.2f} 元\n分类：{category}"
-        except Exception as e:
-            print(f"记账失败: {str(e)[:100]}")
-            return "❌ 记账失败，请稍后重试"
-
-    elif parsed["type"] == "last_record":
-        try:
-            records = get_records_by_user(openid, limit=1)
-            if not records:
-                return "📝 暂无记录"
-            r = records[0]
-            dt = to_local_datetime(r["created_at"])
-            date_str = dt.strftime("%m-%d %H:%M")
-            return f"📝 上次记录：{date_str} {r['description']} {float(r['amount']):.2f}元 [{r['category']}]"
-        except Exception as e:
-            print(f"上次记录失败: {str(e)[:100]}")
-            return "❌ 查询失败，请稍后重试"
-
-    elif parsed["type"] == "undo_last":
-        try:
-            records = get_records_by_user(openid, limit=1)
-            if not records:
-                return "📝 暂无可撤销记录"
-            record = records[0]
-            archive_deleted_record(record, deleted_by=openid)
-            if not delete_record(record["id"]):
-                return "❌ 撤销失败，可能没有权限（请检查 RLS 策略）"
-            return f"✅ 已撤销：{record['description']} {float(record['amount']):.2f}元"
-        except Exception as e:
-            print(f"撤销失败: {str(e)[:100]}")
-            return "❌ 撤销失败，请稍后重试"
-
-    elif parsed["type"] == "record_backfill":
-        try:
-            dt = parse_date_token(parsed["date_token"])
-            if not dt:
-                return "❌ 日期格式错误，示例：补记 昨天 买烟 50 或 补记 01-21 买烟 50"
-            category = resolve_record_category(parsed)
-            add_record(
-                openid=openid,
-                nickname=nickname,
-                amount=parsed["amount"],
-                category=category,
-                description=parsed["description"],
-                created_at=dt
-            )
-            note = ""
-            if not parse_category(parsed.get("description", "")) and category == "其他":
-                note = "\n（该备注未匹配到分类，已归为「其他」，可在网页端修改）"
-            return (
-                f"✅ 补记成功（{parsed['date_token']}）\n"
-                f"{parsed['description']}：{parsed['amount']:.2f} 元\n"
-                f"分类：{category}{note}"
-            )
-        except Exception as e:
-            print(f"补记失败: {str(e)[:100]}")
-            return "❌ 补记失败，请稍后重试"
-
-    elif parsed["type"] == "record_edit":
-        try:
-            records = get_records(limit=20)
-            index = parsed["index"]
-            if index < 1 or index > len(records):
-                return "❌ 编号无效，请先发送「明细」查看编号"
-            record = records[index - 1]
-            category = resolve_record_category(parsed)
-            result = update_record(record["id"], parsed["amount"], category, parsed["description"])
-            if not getattr(result, "data", []):
-                return "❌ 修改失败，可能没有权限（请检查 RLS 策略）"
-            return f"✅ 已修改第 {index} 条\n{parsed['description']}：{parsed['amount']:.2f} 元\n分类：{category}"
-        except Exception as e:
-            print(f"修改记录失败: {str(e)[:100]}")
-            return "❌ 修改失败，请稍后重试"
-
-    elif parsed["type"] == "record_delete":
-        try:
-            # 清理过期
-            pending = PENDING_DELETES.get(openid)
-            if pending and (time.time() - pending["ts"] > PENDING_DELETE_TTL):
-                PENDING_DELETES.pop(openid, None)
-
-            def parse_indices(raw: str) -> list:
-                raw = normalize_dash(raw)
-                raw = raw.replace("，", ",")
-                matches = re.findall(r'\d+\s*-\s*\d+|\d+', raw)
-                indices = []
-                for part in matches:
-                    part = part.replace(" ", "")
-                    if "-" in part:
-                        start, end = part.split("-", 1)
-                        if start.isdigit() and end.isdigit():
-                            s = int(start)
-                            e = int(end)
-                            if s <= e:
-                                indices.extend(list(range(s, e + 1)))
-                    elif part.isdigit():
-                        indices.append(int(part))
-                return sorted(set(indices))
-
-            raw = parsed["raw"]
-            tokens = raw.split()
-            period_token = "今天"
-            if tokens and tokens[0] in ["今天", "今日", "昨天", "昨日", "本周", "本月"] or ("-" in tokens[0]):
-                period_token = tokens[0]
-                raw = " ".join(tokens[1:]).strip()
-            indices = parse_indices(raw)
-            if not indices:
-                return "❌ 格式错误，示例：删 2 或 删 1,3,5 或 删 1-4 或 删 昨天 1-3"
-
-            start_date, end_date = get_date_range("today")
-            if period_token in ["昨天", "昨日"]:
-                start_date, end_date = get_date_range("yesterday")
-            elif period_token == "本周":
-                start_date, end_date = get_date_range("week")
-            elif period_token == "本月":
-                start_date, end_date = get_date_range("month")
-            elif "-" in period_token:
-                dt = parse_date_token(period_token)
-                if dt:
-                    start_date = dt
-                    end_date = dt + timedelta(days=1)
-
-            records = get_records(start_date=start_date - timedelta(days=1), end_date=end_date + timedelta(days=1), limit=50)
-            records = filter_records_by_local_range(records, start_date, end_date)
-            max_index = len(records)
-            invalid = [i for i in indices if i < 1 or i > max_index]
-            if invalid:
-                return "❌ 编号无效，请先发送「明细」查看编号"
-
-            selected = [records[i - 1] for i in indices]
-            PENDING_DELETES[openid] = {
-                "ts": time.time(),
-                "items": selected
-            }
-
-            lines = [f"将删除以下 {len(selected)} 条记录："]
-            for i, r in zip(indices, selected):
-                dt = to_local_datetime(r["created_at"])
-                date_str = dt.strftime("%m-%d %H:%M")
-                lines.append(f"{i}) {date_str} {r['description']} {float(r['amount']):.2f}元 [{r['category']}]")
-            lines.append("确认删除：发送「确认删」")
-            lines.append("取消删除：发送「取消删」")
-            return "\n".join(lines)
-        except Exception as e:
-            print(f"删除记录失败: {str(e)[:100]}")
-            return "❌ 删除失败，请稍后重试"
-
-    elif parsed["type"] == "record_delete_confirm":
-        try:
-            pending = PENDING_DELETES.get(openid)
-            if not pending:
-                return "❌ 没有待确认的删除"
-            if time.time() - pending["ts"] > PENDING_DELETE_TTL:
-                PENDING_DELETES.pop(openid, None)
-                return "❌ 删除已过期，请重新发起"
-
-            deleted = 0
-            for record in pending["items"]:
-                archive_deleted_record(record, deleted_by=openid)
-                if delete_record(record["id"]):
-                    deleted += 1
-
+    # 待确认删除的状态处理
+    pending_del = PENDING_DELETES.get(openid)
+    if pending_del:
+        if time.time() - pending_del["ts"] > PENDING_DELETE_TTL:
             PENDING_DELETES.pop(openid, None)
-            if deleted == 0:
-                return "❌ 删除失败，可能没有权限（请检查 RLS 策略）"
-            return f"✅ 已删除 {deleted} 条记录"
-        except Exception as e:
-            print(f"确认删除失败: {str(e)[:100]}")
-            return "❌ 删除失败，请稍后重试"
+        elif content in ["确认删", "确认删除", "确认"]:
+            try:
+                deleted = 0
+                for record in pending_del["items"]:
+                    archive_deleted_record(record, deleted_by=openid)
+                    if delete_record(record["id"]):
+                        deleted += 1
+                PENDING_DELETES.pop(openid, None)
+                if deleted == 0:
+                    return "删除失败，数据库可能有权限问题"
+                return f"✅ 已删除 {deleted} 条记录"
+            except Exception as e:
+                print(f"确认删除失败: {str(e)[:100]}")
+                return "删除失败，请稍后重试"
+        elif content in ["取消删", "取消删除", "取消"]:
+            PENDING_DELETES.pop(openid, None)
+            return "✅ 已取消删除"
 
-    elif parsed["type"] == "record_delete_cancel":
-        PENDING_DELETES.pop(openid, None)
-        return "✅ 已取消删除"
-
-    elif parsed["type"] == "deleted_list":
-        try:
-            deleted = get_deleted_records(openid, limit=10)
-            if not deleted:
-                return "🗑️ 回收站为空"
-            lines = ["🗑️ 回收站（最近10条）："]
-            for i, r in enumerate(deleted, start=1):
-                dt = to_local_datetime(r["created_at"])
-                date_str = dt.strftime("%m-%d %H:%M")
-                lines.append(f"{i}. {date_str} {r['description']} {float(r['amount']):.2f}元 [{r['category']}]")
-            lines.append("发送：恢复 1 进行恢复")
-            return "\n".join(lines)
-        except Exception as e:
-            print(f"回收站失败: {str(e)[:100]}")
-            return "❌ 回收站查询失败"
-
-    elif parsed["type"] == "restore_deleted":
-        try:
-            result = restore_deleted_record(openid, parsed["index"])
-            if result.get("error") == "invalid":
-                return "❌ 编号无效，请先发送「回收站」查看编号"
-            record = result["restored"]
-            return f"✅ 已恢复：{record['description']} {float(record['amount']):.2f}元"
-        except Exception as e:
-            print(f"恢复失败: {str(e)[:100]}")
-            return "❌ 恢复失败，请稍后重试"
-    
-    elif parsed["type"] == "query":
-        try:
-            start_date, end_date = get_date_range(parsed["period"])
-            period_names = {
-                "today": "今日",
-                "yesterday": "昨日",
-                "7days": "近七天",
-                "15days": "近半个月",
-                "30days": "近一个月",
-                "week": "本周",
-                "month": "本月"
-            }
-            stats = get_statistics(start_date=start_date, end_date=end_date)
-            return format_statistics(stats, period_names[parsed["period"]], start_date, end_date)
-        except Exception as e:
-            print(f"查询失败: {str(e)[:100]}")
-            return "❌ 查询失败，请稍后重试"
-
-    elif parsed["type"] == "query_month":
-        try:
-            start_date = parsed["start_date"]
-            end_date = parsed["end_date"]
-            stats = get_statistics(start_date=start_date, end_date=end_date)
-            return format_statistics(stats, parsed["label"], start_date, end_date)
-        except Exception as e:
-            print(f"月份查询失败: {str(e)[:100]}")
-            return "❌ 查询失败，请稍后重试"
-    
-    elif parsed["type"] == "query_category":
-        try:
-            now = datetime.now(LOCAL_TZ)
-            month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            target_category = parsed["category"]
-            records = get_records(start_date=month_start, category=target_category)
-            records = filter_records_by_local_range(records, month_start, datetime.now(LOCAL_TZ) + timedelta(days=1))
-            total = sum(r["amount"] for r in records)
-            count = len(records)
-            avg = total / count if count else 0
-            if count > 0:
-                result = (
-                    f"📂 本月【{target_category}】支出：{total:.2f} 元\n"
-                    f"🧾 记录数：{count} 条\n"
-                    f"📉 平均单笔：{avg:.2f} 元\n\n"
-                )
-                result += format_records(records, limit=5)
-                return result
-
-            keyword_records = get_records_by_keyword(start_date=month_start, keyword=parsed["category"])
-            keyword_records = filter_records_by_local_range(keyword_records, month_start, datetime.now(LOCAL_TZ) + timedelta(days=1))
-            keyword_total = sum(r["amount"] for r in keyword_records)
-            keyword_count = len(keyword_records)
-            keyword_avg = keyword_total / keyword_count if keyword_count else 0
-            if keyword_count == 0:
-                return "📝 暂无记录"
-
-            result = (
-                f"🔎 本月包含「{parsed['category']}」的支出：{keyword_total:.2f} 元\n"
-                f"🧾 记录数：{keyword_count} 条\n"
-                f"📉 平均单笔：{keyword_avg:.2f} 元\n\n"
-            )
-            result += format_records(keyword_records, limit=5)
-            return result
-        except Exception as e:
-            print(f"分类查询失败: {str(e)[:100]}")
-            return "❌ 查询失败，请稍后重试"
-    
-    elif parsed["type"] == "debt_add":
-        try:
-            new_amount = add_debt(parsed["name"], parsed["amount"], parsed.get("note", ""))
-            note_text = f"\n备注：{parsed['note']}" if parsed.get("note") else ""
-            return (
-                "✅ 记账成功（欠款）\n"
-                f"金额：{parsed['amount']:.2f} 元\n"
-                f"共欠{parsed['name']} {new_amount:.2f}元{note_text}"
-            )
-        except Exception as e:
-            print(f"外债记录失败: {str(e)[:100]}")
-            return "❌ 外债记录失败，请稍后重试"
-
-    elif parsed["type"] == "debt_repay":
-        try:
-            result = repay_debt(parsed["name"], parsed["amount"])
-            if result.get("error") == "not_found":
-                return f"❌ 未找到欠{parsed['name']}的记录"
-            if result.get("error") == "overpay":
-                return f"❌ 当前欠{parsed['name']} {result['balance']:.2f} 元，本次还款超出，请修改金额"
-            if result["status"] == "paid":
-                return (
-                    "✅ 记账成功（还款）\n"
-                    f"金额：{parsed['amount']:.2f} 元\n"
-                    f"已还清欠{parsed['name']}"
-                )
-            return (
-                "✅ 记账成功（还款）\n"
-                f"金额：{parsed['amount']:.2f} 元\n"
-                f"还欠{parsed['name']} {result['balance']:.2f}元"
-            )
-        except Exception as e:
-            print(f"外债还款失败: {str(e)[:100]}")
-            return "❌ 还款失败，请稍后重试"
-
-    elif parsed["type"] == "debt_query_all":
-        try:
-            debts = list_debts()
-            return format_debts(debts)
-        except Exception as e:
-            print(f"外债查询失败: {str(e)[:100]}")
-            return "❌ 外债查询失败，请稍后重试"
-
-    elif parsed["type"] == "report":
-        try:
-            action = parsed["action"]
-            if action == "订阅周报":
-                subscribe_report(openid, "weekly")
-                return "✅ 已订阅周报"
-            if action == "订阅月报":
-                subscribe_report(openid, "monthly")
-                return "✅ 已订阅月报"
-            if action == "取消周报":
-                unsubscribe_report(openid, "weekly")
-                return "✅ 已取消周报"
-            if action == "取消月报":
-                unsubscribe_report(openid, "monthly")
-                return "✅ 已取消月报"
-            if action == "周报":
-                start_date, end_date = get_date_range("7days")
-                stats = get_statistics(start_date=start_date, end_date=end_date)
-                return format_statistics(stats, "近七天", start_date, end_date)
-            if action == "月报":
-                start_date, end_date = get_date_range("30days")
-                stats = get_statistics(start_date=start_date, end_date=end_date)
-                return format_statistics(stats, "近一个月", start_date, end_date)
-            return "❌ 未知指令"
-        except Exception as e:
-            print(f"周报月报失败: {str(e)[:100]}")
-            return "❌ 处理失败，请稍后重试"
-
-    elif parsed["type"] == "detail":
-        try:
-            period = normalize_dash(parsed.get("period", "today"))
-            if period in ["今天", "今日"]:
-                start_date, end_date = get_date_range("today")
-            elif period in ["昨天", "昨日"]:
-                start_date, end_date = get_date_range("yesterday")
-            elif period in ["七天", "近七天"]:
-                start_date, end_date = get_date_range("7days")
-            elif period in ["半个月", "十五天", "近半个月"]:
-                start_date, end_date = get_date_range("15days")
-            elif period in ["一个月", "近一个月", "30天"]:
-                start_date, end_date = get_date_range("30days")
-            elif period == "本周":
-                start_date, end_date = get_date_range("week")
-            elif period == "本月":
-                start_date, end_date = get_date_range("month")
-            else:
-                month_range = parse_month_token(period)
-                if month_range:
-                    start_date, end_date, _ = month_range
-                else:
-                    dt = parse_date_token(period)
-                    if not dt:
-                        return "❌ 明细日期格式错误，示例：明细 昨天 / 明细 01-21 / 明细 1月"
-                    start_date = dt
-                    end_date = dt + timedelta(days=1)
-
-            records = get_records(start_date=start_date - timedelta(days=1), end_date=end_date + timedelta(days=1))
-            records = filter_records_by_local_range(records, start_date, end_date)
-            return format_records(records, limit=20)
-        except Exception as e:
-            print(f"明细查询失败: {str(e)[:100]}")
-            return "❌ 查询失败，请稍后重试"
-
-    elif parsed["type"] == "export":
-        try:
-            target = parsed.get("target", "")
-            mapping = {
-                "今日": "today",
-                "昨天": "yesterday",
-                "昨日": "yesterday",
-                "七天": "7days",
-                "近七天": "7days",
-                "半个月": "15days",
-                "十五天": "15days",
-                "近半个月": "15days",
-                "一个月": "30days",
-                "近一个月": "30days",
-                "本周": "week",
-                "本月": "month",
-                "全部": "all",
-                "所有": "all"
-            }
-            month_range = parse_month_token(target)
-            if month_range:
-                start_date, end_date, label = month_range
-                period_key = f"month:{start_date.strftime('%Y-%m')}"
-            else:
-                period_key = mapping.get(target, "month")
-            export_link = build_export_link(openid, period_key)
-            if not export_link:
-                return "❌ 未配置导出地址，请先设置 PUBLIC_BASE_URL"
-            return f"📥 Excel 导出链接（10分钟内有效）：\n{export_link}"
-        except Exception as e:
-            print(f"导出失败: {str(e)[:100]}")
-            return "❌ 导出失败，请稍后重试"
-
-    elif parsed["type"] == "dashboard":
-        try:
-            return build_dashboard_text()
-        except Exception as e:
-            print(f"面板失败: {str(e)[:100]}")
-            return "❌ 面板生成失败，请稍后重试"
-
-    elif parsed["type"] == "category_learn":
-        try:
-            ok = add_category_alias(parsed["keyword"], parsed["category"])
-            if not ok:
-                return "❌ 纠错失败，请检查格式"
-            return f"✅ 已学习：{parsed['keyword']} → {parsed['category']}"
-        except Exception as e:
-            print(f"纠错失败: {str(e)[:100]}")
-            return "❌ 纠错失败，请稍后重试"
-    
-    elif parsed["type"] == "category_list":
-        try:
-            categories = get_all_categories()
-            if not categories:
-                return "📂 暂无分类"
-            lines = ["📂 所有分类："]
-            for i, cat in enumerate(categories, start=1):
-                lines.append(f"{i}. {cat}")
-            lines.append("\n💡 使用「重命名分类 旧名 新名」来修改")
-            return "\n".join(lines)
-        except Exception as e:
-            print(f"分类列表失败: {str(e)[:100]}")
-            return "❌ 查询失败，请稍后重试"
-    
-    elif parsed["type"] == "category_rename":
-        try:
-            old_name = parsed["old_name"]
-            new_name = parsed["new_name"]
-            result = rename_category(old_name, new_name)
-            if not result.get("success"):
-                return f"❌ 重命名失败：{result.get('error', '未知错误')}"
-            count = result.get("count", 0)
-            return f"✅ 已将分类「{old_name}」重命名为「{new_name}」\n📝 更新了 {count} 条历史记录"
-        except Exception as e:
-            print(f"重命名分类失败: {str(e)[:100]}")
-            return "❌ 重命名失败，请稍后重试"
-    
-    elif parsed["type"] == "delete_by_desc":
-        try:
-            desc = parsed["description"]
-            records = get_records_by_user(openid, limit=20)
-            matched = [r for r in records if desc in r.get("description", "")]
-            if not matched:
-                return f"❌ 没找到包含「{desc}」的记录"
-            record = matched[0]
-            archive_deleted_record(record, deleted_by=openid)
-            if not delete_record(record["id"]):
-                return "❌ 删除失败，可能没有权限（请检查 RLS 策略）"
-            dt = to_local_datetime(record["created_at"])
-            return f"✅ 已删除：{dt.strftime('%m-%d %H:%M')} {record['description']} {float(record['amount']):.2f}元 [{record['category']}]"
-        except Exception as e:
-            print(f"按描述删除失败: {str(e)[:100]}")
-            return "❌ 删除失败，请稍后重试"
-
-    elif parsed["type"] == "reclassify_by_desc":
-        try:
-            desc = parsed["description"]
-            records = get_records_by_user(openid, limit=50)
-            matched = [r for r in records if desc in r.get("description", "")]
-            if not matched:
-                return f"❌ 没找到包含「{desc}」的记录"
-            new_category = ai_smart_classify(desc)
-            if not new_category:
-                return f"❌ AI 无法为「{desc}」确定新分类，请手动指定：纠错 {desc} 分类名"
-            updated = 0
-            for record in matched:
-                if record["category"] != new_category:
-                    update_record(record["id"], float(record["amount"]), new_category, record["description"])
-                    updated += 1
-            add_category_alias(desc, new_category)
-            if updated == 0:
-                return f"📂 「{desc}」已经在分类「{new_category}」中，无需变更"
-            return f"✅ 已将「{desc}」的 {updated} 条记录重新归类到「{new_category}」"
-        except Exception as e:
-            print(f"重新归类失败: {str(e)[:100]}")
-            return "❌ 重新归类失败，请稍后重试"
-
-    elif parsed["type"] == "create_group_move":
-        try:
-            group = parsed["group"]
-            desc = parsed["description"]
-            _ensure_category_in_tree(group, "")
-            if not desc:
-                return f"✅ 已新建分组「{group}」\n\n💡 可以发送「纠错 凉皮 {group}」将关键词归到此分组"
-            records = get_records_by_user(openid, limit=50)
-            matched = [r for r in records if desc in r.get("description", "")]
-            if not matched:
-                return f"✅ 已新建分组「{group}」\n❌ 但没找到包含「{desc}」的记录可移动"
-            moved = 0
-            for record in matched:
-                update_record(record["id"], float(record["amount"]), group, record["description"])
-                moved += 1
-            add_category_alias(desc, group)
-            return f"✅ 已新建分组「{group}」并将「{desc}」的 {moved} 条记录移入"
-        except Exception as e:
-            print(f"新建分组移动失败: {str(e)[:100]}")
-            return "❌ 操作失败，请稍后重试"
-
-    else:
-        return handle_ai_intent(openid, nickname, content)
+    # 所有消息交给 AI 理解和处理
+    return handle_ai_intent(openid, nickname, content)
 
 
 # ============ 微信公众号验证 ============
