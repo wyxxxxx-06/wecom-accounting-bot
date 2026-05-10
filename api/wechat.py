@@ -833,14 +833,47 @@ def add_category_alias(keyword: str, category: str) -> bool:
         return True
 
 
+BUILTIN_CATEGORY_KEYWORDS = {
+    "正餐": ["午饭", "晚饭", "早饭", "午餐", "晚餐", "早餐", "饭", "排骨饭", "炒饭", "盖饭", "面条", "米粉", "炒米粉", "拌面", "沙县", "沙县小吃", "黄焖鸡", "麻辣烫", "快餐", "外卖", "堂食"],
+    "小吃": ["串串", "串串香", "烧烤", "凉皮", "肠粉", "煎饼", "包子", "馒头", "饺子", "馄饨", "粥", "豆浆", "油条", "咯摊", "炸鸡", "鸡排", "烤肉"],
+    "饮品": ["奶茶", "咖啡", "茶", "果汁", "可乐", "雪碧", "矿泉水", "买水", "水", "四果汤", "饮料", "啤酒", "酒"],
+    "买菜": ["买菜", "蔬菜", "水果", "猪肉", "牛肉", "鸡肉", "鱼", "海鲜", "菜市场"],
+    "日用品": ["纸巾", "洗衣液", "牙膏", "牙刷", "洗发水", "沐浴露", "驱虫", "驱虫工具", "垃圾袋", "拖把"],
+    "网购": ["拼多多", "淘宝", "京东", "1688", "先采后付", "花呗", "天猫"],
+    "交通": ["打车", "滴滴", "公交", "地铁", "加油", "油费", "停车", "过路费", "高速"],
+    "话费": ["话费", "流量", "充值", "宽带"],
+    "烟酒": ["买烟", "烟", "香烟", "白酒", "红酒"],
+    "维修": ["修车", "小白修车", "维修", "修理"],
+    "保险": ["保险", "社保", "医保"],
+    "服饰": ["衣服", "裤子", "鞋", "帽子", "袜子"],
+    "医疗": ["药", "看病", "医院", "诊所", "体检"],
+    "娱乐": ["电影", "游戏", "KTV", "唱歌"],
+}
+
+
+def keyword_classify(text: str) -> str:
+    """基于内置关键词表进行分类，支持模糊匹配。不依赖AI。"""
+    text_lower = text.strip().lower()
+    if not text_lower:
+        return ""
+    for category, keywords in BUILTIN_CATEGORY_KEYWORDS.items():
+        for kw in keywords:
+            if kw in text_lower or text_lower in kw:
+                return category
+    return ""
+
+
 def parse_category(text: str) -> str:
-    """从文本识别分类：仅用用户配置的别名，完全匹配；未匹配返回空字符串（由调用方决定是否用「其他」或让用户选择）。"""
-    return match_alias_category(text)
+    """从文本识别分类：先查别名，再查内置关键词表。"""
+    result = match_alias_category(text)
+    if result:
+        return result
+    return keyword_classify(text)
 
 
 def match_alias_category(text: str) -> str:
     """仅当用户配置的别名与备注完全一致 **且目标分类仍然存在** 时才自动归类；
-    否则返回空，必须让用户选择分类。不再使用任何内置关键词（如交通、餐饮）。"""
+    否则返回空。"""
     text_lower = (text or "").strip().lower()
     if not text_lower:
         return ""
@@ -848,13 +881,12 @@ def match_alias_category(text: str) -> str:
     matched = aliases.get(text_lower, "")
     if not matched:
         return ""
-    # 验证目标分类仍然存在于用户的分类列表中（防止别名指向已删除/不存在的分类如「购物」「交通」）
     all_cats = get_all_categories()
     for cat in all_cats:
         if cat == matched or cat.startswith(matched + "|") or matched.startswith(cat + "|"):
             return matched
-    # 目标分类不存在，视为无效别名
-    return ""
+    # 目标分类不存在但别名有记录，仍然返回（新分类会自动创建）
+    return matched
 
 
 def get_category_candidates() -> list:
@@ -2858,14 +2890,25 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                 for item in parsed_items:
                     desc = item["parsed"]["description"]
                     alias = match_alias_category(desc)
-                    item["category"] = alias if alias else None
-                    if not alias:
-                        descs_need_ai.append(desc)
+                    if alias:
+                        item["category"] = alias
+                    else:
+                        kw_cat = keyword_classify(desc)
+                        if kw_cat:
+                            item["category"] = kw_cat
+                        else:
+                            item["category"] = None
+                            descs_need_ai.append(desc)
 
                 ai_categories = {}
+                ai_error = ""
                 if descs_need_ai:
-                    ai_categories = ai_batch_classify(descs_need_ai)
+                    try:
+                        ai_categories = ai_batch_classify(descs_need_ai)
+                    except Exception as e:
+                        ai_error = str(e)[:80]
 
+                results_detail = []
                 for item in parsed_items:
                     try:
                         desc = item["parsed"]["description"]
@@ -2880,13 +2923,19 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                             description=desc,
                             created_at=item["date"]
                         )
+                        results_detail.append(f"{desc} → {category}")
                         success += 1
                     except Exception:
                         failed.append(item["line"])
 
-                msg = f"✅ 批量记账完成：成功{success}条"
+                msg = f"✅ 批量记账完成：成功{success}条\n"
+                msg += "\n".join(results_detail[:15])
+                if len(results_detail) > 15:
+                    msg += f"\n...等共{len(results_detail)}条"
                 if failed:
                     msg += f"\n❌ 失败{len(failed)}条：\n" + "\n".join(failed[:5])
+                if ai_error:
+                    msg += f"\n⚠️ AI分类异常：{ai_error}"
                 return msg
 
     # 待确认删除的状态处理
@@ -2959,7 +3008,7 @@ async def debug_db():
     info = {
         "supabase_url": SUPABASE_URL[:30] + "..." if SUPABASE_URL else "(empty)",
         "supabase_key_prefix": SUPABASE_KEY[:20] + "..." if SUPABASE_KEY else "(empty)",
-        "deepseek_key": "set" if DEEPSEEK_API_KEY else "(empty)",
+        "deepseek_key": DEEPSEEK_API_KEY[:10] + "..." if DEEPSEEK_API_KEY else "(empty)",
     }
     try:
         supabase = get_supabase_client()
@@ -2971,6 +3020,31 @@ async def debug_db():
         info["db_error"] = str(e)
         info["db_traceback"] = traceback.format_exc()[-500:]
     return info
+
+
+@app.get("/api/test_ai")
+async def test_ai():
+    """测试 AI 分类是否正常工作"""
+    import traceback
+    result = {"deepseek_key": DEEPSEEK_API_KEY[:10] + "..." if DEEPSEEK_API_KEY else "(empty)"}
+
+    test_items = ["肠粉", "买菜", "打车"]
+    result["keyword_classify"] = {item: keyword_classify(item) for item in test_items}
+
+    try:
+        ai_result = _call_deepseek("请回复OK", max_tokens=10)
+        result["ai_basic_test"] = ai_result if ai_result else "(empty response)"
+    except Exception as e:
+        result["ai_basic_test"] = f"ERROR: {str(e)}"
+        result["ai_traceback"] = traceback.format_exc()[-500:]
+
+    try:
+        batch_result = ai_batch_classify(["肠粉", "买烟", "打车"])
+        result["ai_batch_test"] = batch_result if batch_result else "(empty result)"
+    except Exception as e:
+        result["ai_batch_test"] = f"ERROR: {str(e)}"
+
+    return result
 
 
 @app.head("/api/health")
