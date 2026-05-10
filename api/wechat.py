@@ -898,6 +898,56 @@ def _call_deepseek(prompt: str, max_tokens: int = 60) -> str:
     return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
 
+def ai_batch_classify(descriptions: list) -> dict:
+    """一次性为多条记录分类，返回 {描述: 分类} 的映射。"""
+    if not DEEPSEEK_API_KEY or not descriptions:
+        return {}
+
+    all_cats = get_all_categories()
+    cats_text = "、".join(all_cats[:30]) if all_cats else "暂无"
+
+    items_text = "\n".join(f"{i+1}. {d}" for i, d in enumerate(descriptions))
+
+    prompt = f"""你是记账分类助手。请为以下消费项目分配分类。
+
+已有分类：{cats_text}
+
+待分类项目：
+{items_text}
+
+规则：
+- 优先从已有分类中选择最合适的
+- 如果没有合适的已有分类，新建一个简短的分类名（2-4个字）
+- 食物类：正餐、小吃、饮品、买菜 等
+- 购物类：日用品、网购、服饰 等
+- 出行类：交通、加油 等
+- 生活类：话费、保险、维修 等
+
+请严格按以下格式回复（每行一个，序号.分类名）：
+1.分类名
+2.分类名
+..."""
+
+    try:
+        result = _call_deepseek(prompt, max_tokens=500)
+        mapping = {}
+        for line in result.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            import re as _re
+            m = _re.match(r'^(\d+)[.、．]\s*(.+)$', line)
+            if m:
+                idx = int(m.group(1)) - 1
+                cat = m.group(2).strip()
+                if 0 <= idx < len(descriptions) and cat:
+                    mapping[descriptions[idx]] = cat
+        return mapping
+    except Exception as e:
+        print(f"AI批量分类失败: {str(e)[:100]}")
+        return {}
+
+
 def ai_parse_intent(user_msg: str, recent_records_text: str = "", all_categories_text: str = "") -> dict:
     """AI 作为主大脑理解用户自然语言，返回结构化意图。"""
     if not DEEPSEEK_API_KEY:
@@ -2773,6 +2823,7 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                             pass
                 return {"type": "unknown"}
 
+            parsed_items = []
             for line in lines:
                 record_date = None
                 record_text = line
@@ -2796,31 +2847,43 @@ def handle_message(openid: str, nickname: str, content: str) -> str:
                     parsed_line = parse_record_text(record_text)
 
                 if parsed_line["type"] == "record":
-                    try:
-                        alias_category = match_alias_category(parsed_line["description"])
-                        if not alias_category:
-                            alias_category = ai_smart_classify(parsed_line["description"])
-                        if not alias_category:
-                            alias_category = "其他"
-                        category = alias_category
-                        add_category_alias(parsed_line["description"], category)
-                        add_record(
-                            openid=openid,
-                            nickname=nickname,
-                            amount=parsed_line["amount"],
-                            category=category,
-                            description=parsed_line["description"],
-                            created_at=record_date
-                        )
-                        success += 1
-                    except Exception:
-                        failed.append(line)
+                    parsed_items.append({"parsed": parsed_line, "date": record_date, "line": line})
                 else:
                     failed.append(line)
 
-            if success == 0 and failed:
+            if not parsed_items:
                 pass
             else:
+                descs_need_ai = []
+                for item in parsed_items:
+                    desc = item["parsed"]["description"]
+                    alias = match_alias_category(desc)
+                    item["category"] = alias if alias else None
+                    if not alias:
+                        descs_need_ai.append(desc)
+
+                ai_categories = {}
+                if descs_need_ai:
+                    ai_categories = ai_batch_classify(descs_need_ai)
+
+                for item in parsed_items:
+                    try:
+                        desc = item["parsed"]["description"]
+                        category = item["category"] or ai_categories.get(desc, "") or "其他"
+                        _ensure_category_in_tree(category, "")
+                        add_category_alias(desc, category)
+                        add_record(
+                            openid=openid,
+                            nickname=nickname,
+                            amount=item["parsed"]["amount"],
+                            category=category,
+                            description=desc,
+                            created_at=item["date"]
+                        )
+                        success += 1
+                    except Exception:
+                        failed.append(item["line"])
+
                 msg = f"✅ 批量记账完成：成功{success}条"
                 if failed:
                     msg += f"\n❌ 失败{len(failed)}条：\n" + "\n".join(failed[:5])
