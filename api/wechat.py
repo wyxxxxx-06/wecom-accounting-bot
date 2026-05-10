@@ -872,20 +872,15 @@ def parse_category(text: str) -> str:
 
 
 def match_alias_category(text: str) -> str:
-    """仅当用户配置的别名与备注完全一致 **且目标分类仍然存在** 时才自动归类；
-    否则返回空。"""
+    """仅当用户配置的别名与备注完全一致时才自动归类。
+    忽略指向"其他"的别名（这些是之前AI失败时的垃圾数据）。"""
     text_lower = (text or "").strip().lower()
     if not text_lower:
         return ""
     aliases = get_category_aliases()
     matched = aliases.get(text_lower, "")
-    if not matched:
+    if not matched or matched == "其他":
         return ""
-    all_cats = get_all_categories()
-    for cat in all_cats:
-        if cat == matched or cat.startswith(matched + "|") or matched.startswith(cat + "|"):
-            return matched
-    # 目标分类不存在但别名有记录，仍然返回（新分类会自动创建）
     return matched
 
 
